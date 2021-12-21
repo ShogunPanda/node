@@ -1349,15 +1349,12 @@ added:
 Limit the amount of time the parser will wait to receive the complete HTTP
 headers.
 
-In case of inactivity, the rules defined in [`server.timeout`][] apply. However,
-that inactivity based timeout would still allow the connection to be kept open
-if the headers are being sent very slowly (by default, up to a byte per 2
-minutes). In order to prevent this, whenever header data arrives an additional
-check is made that more than `server.headersTimeout` milliseconds has not
-passed since the connection was established. If the check fails, a `'timeout'`
-event is emitted on the server object, and (by default) the socket is destroyed.
-See [`server.timeout`][] for more information on how timeout behavior can be
-customized.
+If the timeout expires, the server responds with status 408 without
+forwarding the request to the request listener and then closes the connection.
+
+It must be set to a non-zero value (e.g. 120 seconds) to protect against
+potential Denial-of-Service attacks in case the server is deployed without a
+reverse proxy in front.
 
 ### `server.listen()`
 

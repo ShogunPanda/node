@@ -8,6 +8,7 @@ const { connect } = require('net');
 // This test validates that the server returns 408
 // after server.requestTimeout if the client
 // pauses sending in the middle of the body.
+
 let sendDelayedRequestBody;
 const server = createServer(common.mustCall((req, res) => {
   let body = '';
@@ -41,8 +42,7 @@ server.listen(0, common.mustCall(() => {
     response += chunk.toString('utf-8');
   }));
 
-  const errOrEnd = common.mustCall(function(err) {
-    console.log(err);
+  const errOrEnd = common.mustSucceed(function(err) {
     assert.strictEqual(
       response,
       'HTTP/1.1 408 Request Timeout\r\nConnection: close\r\n\r\n'
@@ -63,6 +63,6 @@ server.listen(0, common.mustCall(() => {
   sendDelayedRequestBody = common.mustCall(() => {
     setTimeout(() => {
       client.write('1234567890\r\n\r\n');
-    }, common.platformTimeout(2000)).unref();
+    }, common.platformTimeout(requestTimeout * 2)).unref();
   });
 }));

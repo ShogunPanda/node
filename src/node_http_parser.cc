@@ -211,7 +211,6 @@ class Parser : public AsyncWrap, public StreamListener {
     num_fields_ = num_values_ = 0;
     url_.Reset();
     status_message_.Reset();
-    header_parsing_start_time_ = uv_hrtime();
 
     Local<Value> cb = object()->Get(env()->context(), kOnMessageBegin)
                               .ToLocalChecked();
@@ -301,7 +300,6 @@ class Parser : public AsyncWrap, public StreamListener {
 
   int on_headers_complete() {
     header_nread_ = 0;
-    header_parsing_start_time_ = 0;
 
     // Arguments for the on-headers-complete javascript callback. This
     // list needs to be kept in sync with the actual argument list for
@@ -548,7 +546,6 @@ class Parser : public AsyncWrap, public StreamListener {
     Environment* env = Environment::GetCurrent(args);
 
     uint64_t max_http_header_size = 0;
-    uint64_t headers_timeout = 0;
     uint32_t lenient_flags = kLenientNone;
 
     CHECK(args[0]->IsInt32());
@@ -568,11 +565,6 @@ class Parser : public AsyncWrap, public StreamListener {
       lenient_flags = args[3].As<Int32>()->Value();
     }
 
-    if (args.Length() > 4) {
-      CHECK(args[4]->IsInt32());
-      headers_timeout = args[4].As<Int32>()->Value();
-    }
-
     llhttp_type_t type =
         static_cast<llhttp_type_t>(args[0].As<Int32>()->Value());
 
@@ -589,7 +581,7 @@ class Parser : public AsyncWrap, public StreamListener {
 
     parser->set_provider_type(provider);
     parser->AsyncReset(args[1].As<Object>());
-    parser->Init(type, max_http_header_size, lenient_flags, headers_timeout);
+    parser->Init(type, max_http_header_size, lenient_flags);
   }
 
   template <bool should_pause>
@@ -692,24 +684,6 @@ class Parser : public AsyncWrap, public StreamListener {
     // Exception
     if (ret.IsEmpty())
       return;
-
-    // check header parsing time
-    if (header_parsing_start_time_ != 0 && headers_timeout_ != 0) {
-      uint64_t now = uv_hrtime();
-      uint64_t parsing_time = (now - header_parsing_start_time_) / 1000000;
-
-      if (parsing_time > headers_timeout_) {
-        Local<Value> cb =
-            object()->Get(env()->context(), kOnTimeout).ToLocalChecked();
-
-        if (!cb->IsFunction())
-          return;
-
-        MakeCallback(cb.As<Function>(), 0, nullptr);
-
-        return;
-      }
-    }
 
     Local<Value> cb =
         object()->Get(env()->context(), kOnExecute).ToLocalChecked();
@@ -856,7 +830,7 @@ class Parser : public AsyncWrap, public StreamListener {
 
 
   void Init(llhttp_type_t type, uint64_t max_http_header_size,
-            uint32_t lenient_flags, uint64_t headers_timeout) {
+            uint32_t lenient_flags) {
     llhttp_init(&parser_, type, &settings);
 
     if (lenient_flags & kLenientHeaders) {
@@ -877,8 +851,6 @@ class Parser : public AsyncWrap, public StreamListener {
     have_flushed_ = false;
     got_exception_ = false;
     max_http_header_size_ = max_http_header_size;
-    header_parsing_start_time_ = 0;
-    headers_timeout_ = headers_timeout;
   }
 
 
@@ -929,8 +901,6 @@ class Parser : public AsyncWrap, public StreamListener {
   bool pending_pause_ = false;
   uint64_t header_nread_ = 0;
   uint64_t max_http_header_size_;
-  uint64_t headers_timeout_;
-  uint64_t header_parsing_start_time_ = 0;
 
   BaseObjectPtr<BindingData> binding_data_;
 

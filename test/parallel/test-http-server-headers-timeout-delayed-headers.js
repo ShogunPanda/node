@@ -6,7 +6,7 @@ const { createServer } = require('http');
 const { connect } = require('net');
 
 // This test validates that the server returns 408
-// after server.requestTimeout if the client
+// after server.headersTimeout if the client
 // pauses before start sending the request.
 
 let sendDelayedRequestHeaders;
@@ -16,11 +16,19 @@ server.on('connection', common.mustCall(() => {
   sendDelayedRequestHeaders();
 }));
 
-// 0 seconds is the default
-assert.strictEqual(server.requestTimeout, 0);
-const requestTimeout = common.platformTimeout(1000);
-server.requestTimeout = requestTimeout;
-assert.strictEqual(server.requestTimeout, requestTimeout);
+// 60 seconds is the default
+assert.strictEqual(server.headersTimeout, 60000);
+const headersTimeout = common.platformTimeout(1000);
+server.headersTimeout = headersTimeout;
+assert.strictEqual(server.headersTimeout, headersTimeout);
+
+// Make sure requestTimeout is big enough for the headersTimeout.
+server.requestTimeout = 0;
+
+// Check that timeout event is not triggered
+server.once('timeout', common.mustNotCall((socket) => {
+  socket.destroy();
+}));
 
 server.listen(0, common.mustCall(() => {
   const client = connect(server.address().port);
@@ -49,6 +57,6 @@ server.listen(0, common.mustCall(() => {
       client.write('Content-Length: 20\r\n');
       client.write('Connection: close\r\n\r\n');
       client.write('12345678901234567890\r\n\r\n');
-    }, common.platformTimeout(requestTimeout * 2)).unref();
+    }, common.platformTimeout(headersTimeout * 2)).unref();
   });
 }));
