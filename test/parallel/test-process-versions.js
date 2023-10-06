@@ -15,7 +15,7 @@ const expected_keys = [
   'zlib',
   'nghttp2',
   'napi',
-  'llhttp',
+  'milo',
   'uvwasi',
   'acorn',
   'simdutf',
@@ -58,7 +58,7 @@ const commonTemplate = /^\d+\.\d+\.\d+(?:-.*)?$/;
 assert.match(process.versions.acorn, commonTemplate);
 assert.match(process.versions.ares, commonTemplate);
 assert.match(process.versions.brotli, commonTemplate);
-assert.match(process.versions.llhttp, commonTemplate);
+assert.match(process.versions.milo, commonTemplate);
 assert.match(process.versions.node, commonTemplate);
 assert.match(process.versions.uv, commonTemplate);
 assert.match(process.versions.zlib, /^\d+(?:\.\d+){2,3}(?:-.*)?$/);

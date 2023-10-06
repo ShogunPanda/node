@@ -42,11 +42,11 @@ function makeHttp11Request(cb) {
   });
 }
 
-function makeHttp10Request(cb) {
-  // We have to manually make HTTP/1.0 requests since Node does not allow sending them:
+function makeHttpWithNoKeepAliveRequest(cb) {
   const socket = net.connect({ port: server.address().port }, function() {
-    socket.write('GET / HTTP/1.0\r\n' +
+    socket.write('GET / HTTP/1.1\r\n' +
                'Host: localhost:' + server.address().port + '\r\n' +
+               'Connection: close\r\n' +
                 '\r\n');
     socket.resume(); // Ignore the response itself
 
@@ -62,7 +62,7 @@ server.listen(0, function() {
       // Both HTTP/1.1 requests should have used the same socket:
       assert.strictEqual(firstSocket, secondSocket);
 
-      makeHttp10Request(function(socket) {
+      makeHttpWithNoKeepAliveRequest(function(socket) {
         // The server should have immediately closed the HTTP/1.0 socket:
         assert.strictEqual(socket.closed, true);
         server.close();

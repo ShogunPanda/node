@@ -510,7 +510,8 @@
       'include_dirs': [
         'src',
         'deps/v8/include',
-        'deps/postject'
+        'deps/postject',
+        'deps/milo'
       ],
 
       'sources': [
@@ -521,6 +522,8 @@
         'deps/histogram/histogram.gyp:histogram',
         'deps/uvwasi/uvwasi.gyp:uvwasi',
       ],
+
+      'libraries': ['../../deps/milo/libmilo.a'],
 
       'msvs_settings': {
         'VCLinkerTool': {
@@ -809,6 +812,7 @@
       'include_dirs': [
         'src',
         'deps/postject',
+        'deps/milo',
         '<(SHARED_INTERMEDIATE_DIR)' # for node_natives.h
       ],
       'dependencies': [
@@ -832,6 +836,8 @@
         # node.gyp is added by default, common.gypi is added for change detection
         'common.gypi',
       ],
+
+      'libraries': ['../../deps/milo/libmilo.a'],
 
       'variables': {
         'openssl_system_ca_path%': '',
@@ -1062,6 +1068,7 @@
         'deps/cares/include',
         'deps/uv/include',
         'deps/uvwasi/include',
+        'deps/milo',
         'test/cctest',
       ],
 
@@ -1072,6 +1079,8 @@
       ],
 
       'sources': [ '<@(node_cctest_sources)' ],
+
+      'libraries': ['../../deps/milo/libmilo.a'],
 
       'conditions': [
         [ 'node_use_openssl=="true"', {
@@ -1138,6 +1147,7 @@
         'deps/cares/include',
         'deps/uv/include',
         'deps/uvwasi/include',
+        'deps/milo',
         'test/embedding',
       ],
 
@@ -1145,6 +1155,8 @@
         'src/node_snapshot_stub.cc',
         'test/embedding/embedtest.cc',
       ],
+
+      'libraries': ['../../deps/milo/libmilo.a'],
 
       'conditions': [
         ['OS=="solaris"', {
@@ -1249,6 +1261,7 @@
         'deps/cares/include',
         'deps/uv/include',
         'deps/uvwasi/include',
+        'deps/milo'
       ],
 
       'defines': [ 'NODE_WANT_INTERNALS=1' ],
@@ -1257,6 +1270,8 @@
         'src/node_snapshot_stub.cc',
         'tools/snapshot/node_mksnapshot.cc',
       ],
+
+      'libraries': ['../../deps/milo/libmilo.a'],
 
       'conditions': [
         ['node_write_snapshot_as_array_literals=="true"', {

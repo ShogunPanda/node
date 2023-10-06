@@ -334,7 +334,8 @@ static void expect_handshake() {
 
 static void expect_handshake_failure() {
   const char UPGRADE_RESPONSE[] =
-      "HTTP/1.0 400 Bad Request\r\n"
+      "HTTP/1.1 400 Bad Request\r\n"
+      "Connection: close\r\n"
       "Content-Type: text/html; charset=UTF-8\r\n\r\n"
       "WebSockets request was expected\r\n";
   expect_on_client(UPGRADE_RESPONSE, sizeof(UPGRADE_RESPONSE) - 1);

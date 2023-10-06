@@ -33,11 +33,14 @@ http.createServer(function(req, res) {
     'CHUNKED',
     'x-BaR',
     'yoyoyo',
+    'Trailer',
+    'x-bar',
     'Connection',
     'keep-alive',
   ];
   const expectHeaders = {
     'host': `localhost:${this.address().port}`,
+    'trailer': 'x-bar',
     'transfer-encoding': 'CHUNKED',
     'x-bar': 'yoyoyo',
     'connection': 'keep-alive'
@@ -84,6 +87,7 @@ http.createServer(function(req, res) {
   ]);
   req.setHeader('transfer-ENCODING', 'CHUNKED');
   req.setHeader('x-BaR', 'yoyoyo');
+  req.setHeader('Trailer', 'x-bar');
   req.end('y b a r');
   req.on('response', function(res) {
     const expectRawHeaders = [
@@ -124,7 +128,6 @@ http.createServer(function(req, res) {
 
       assert.deepStrictEqual(res.rawTrailers, expectRawTrailers);
       assert.deepStrictEqual(res.trailers, expectTrailers);
-      console.log('ok');
     });
     res.resume();
   });

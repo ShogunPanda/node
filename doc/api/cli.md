@@ -1000,33 +1000,6 @@ Valid values are `"commonjs"` and `"module"`. The default is `"commonjs"`.
 
 The REPL does not support this option.
 
-### `--insecure-http-parser`
-
-<!-- YAML
-added:
- - v13.4.0
- - v12.15.0
- - v10.19.0
--->
-
-Enable leniency flags on the HTTP parser. This may allow
-interoperability with non-conformant HTTP implementations.
-
-When enabled, the parser will accept the following:
-
-* Invalid HTTP headers values.
-* Invalid HTTP versions.
-* Allow message containing both `Transfer-Encoding`
-  and `Content-Length` headers.
-* Allow extra data after message when `Connection: close` is present.
-* Allow extra trasfer encodings after `chunked` has been provided.
-* Allow `\n` to be used as token separator instead of `\r\n`.
-* Allow `\r\n` not to be provided after a chunk.
-* Allow spaces to be present after a chunk size and before `\r\n`.
-
-All the above will expose your application to request smuggling
-or poisoning attack. Avoid using this option.
-
 ### `--inspect[=[host:]port]`
 
 <!-- YAML
@@ -2310,7 +2283,6 @@ Node.js options that are allowed are:
 * `--icu-data-dir`
 * `--import`
 * `--input-type`
-* `--insecure-http-parser`
 * `--inspect-brk`
 * `--inspect-port`, `--debug-port`
 * `--inspect-publish-uid`

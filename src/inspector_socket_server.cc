@@ -97,7 +97,8 @@ const char* MatchPathSegment(const char* path, const char* expected) {
 void SendHttpResponse(InspectorSocket* socket,
                       const std::string& response,
                       int code) {
-  const char HEADERS[] = "HTTP/1.0 %d OK\r\n"
+  const char HEADERS[] = "HTTP/1.1 %d OK\r\n"
+                         "Connection: close\r\n"
                          "Content-Type: application/json; charset=UTF-8\r\n"
                          "Cache-Control: no-cache\r\n"
                          "Content-Length: %zu\r\n"

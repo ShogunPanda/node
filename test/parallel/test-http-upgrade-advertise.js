@@ -6,11 +6,10 @@ const http = require('http');
 
 const tests = [
   { headers: {}, expected: 'regular' },
-  { headers: { upgrade: 'h2c' }, expected: 'regular' },
+  { headers: { upgrade: 'h2c' }, expected: 'error' },
   { headers: { connection: 'upgrade' }, expected: 'regular' },
   { headers: { connection: 'upgrade', upgrade: 'h2c' }, expected: 'upgrade' },
   { headers: { connection: 'upgrade', upgrade: 'h2c' }, expected: 'destroy' },
-  { headers: { connection: 'upgrade', upgrade: 'h2c' }, expected: 'regular' },
 ];
 
 function fire() {
@@ -31,7 +30,7 @@ function fire() {
     headers: test.headers
   }, function onResponse(res) {
     res.resume();
-    done('regular');
+    done(res.statusCode === 400 ? 'error' : 'regular');
   });
 
   if (test.expected === 'destroy') {
@@ -50,10 +49,16 @@ function fire() {
 }
 
 const server = http.createServer(function(req, res) {
-  res.writeHead(200, {
-    Connection: 'upgrade, keep-alive',
-    Upgrade: 'h2c'
-  });
+  let headers = {};
+
+  if (req.headers.connection === 'upgrade' && req.headers.upgrade === 'h2c') {
+    headers = {
+      Connection: 'upgrade',
+      Upgrade: 'h2c'
+    };
+  }
+
+  res.writeHead(200, headers);
   res.end('hello world');
 }).on('upgrade', function(req, socket) {
   socket.end('HTTP/1.1 101 Switching protocols\r\n' +

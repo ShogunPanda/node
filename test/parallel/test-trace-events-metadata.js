@@ -37,8 +37,8 @@ proc.once('exit', common.mustCall(() => {
       trace.name === 'node' &&
         trace.args.process.versions.http_parser ===
           process.versions.http_parser &&
-        trace.args.process.versions.llhttp ===
-          process.versions.llhttp &&
+        trace.args.process.versions.milo ===
+          process.versions.milo &&
         trace.args.process.versions.node ===
           process.versions.node &&
         trace.args.process.versions.v8 ===

@@ -168,11 +168,7 @@
       ],
     }],
 
-    [ 'node_shared_http_parser=="false"', {
-      'dependencies': [
-        'deps/llhttp/llhttp.gyp:llhttp'
-      ],
-    } ],
+    [ 'node_shared_http_parser=="false"', {} ],
 
     [ 'node_shared_cares=="false"', {
       'dependencies': [ 'deps/cares/cares.gyp:cares' ],

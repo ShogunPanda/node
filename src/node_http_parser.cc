@@ -28,23 +28,10 @@
 #include "memory_tracker-inl.h"
 #include "stream_base-inl.h"
 #include "v8.h"
-#include "llhttp.h"
+#include "milo.h"
 
 #include <cstdlib>  // free()
 #include <cstring>  // strdup(), strchr()
-
-
-// This is a binding to llhttp (https://github.com/nodejs/llhttp)
-// The goal is to decouple sockets from parsing for more javascript-level
-// agility. A Buffer is read from a socket and passed to parser.execute().
-// The parser then issues callbacks with slices of the data
-//     parser.onMessageBegin
-//     parser.onPath
-//     parser.onBody
-//     ...
-// No copying is performed when slicing the buffer, only small reference
-// allocations.
-
 
 namespace node {
 namespace {  // NOLINT(build/namespaces)
@@ -74,32 +61,14 @@ const uint32_t kOnMessageBegin = 0;
 const uint32_t kOnHeaders = 1;
 const uint32_t kOnHeadersComplete = 2;
 const uint32_t kOnBody = 3;
-const uint32_t kOnMessageComplete = 4;
-const uint32_t kOnExecute = 5;
-const uint32_t kOnTimeout = 6;
+const uint32_t kOnTrailers = 4;
+const uint32_t kOnTrailersComplete = 5;
+const uint32_t kOnMessageComplete = 6;
+const uint32_t kOnExecute = 7;
+
 // Any more fields than this will be flushed into JS
 const size_t kMaxHeaderFieldsCount = 32;
-
-const uint32_t kLenientNone = 0;
-const uint32_t kLenientHeaders = 1 << 0;
-const uint32_t kLenientChunkedLength = 1 << 1;
-const uint32_t kLenientKeepAlive = 1 << 2;
-const uint32_t kLenientTransferEncoding = 1 << 3;
-const uint32_t kLenientVersion = 1 << 4;
-const uint32_t kLenientDataAfterClose = 1 << 5;
-const uint32_t kLenientOptionalLFAfterCR = 1 << 6;
-const uint32_t kLenientOptionalCRLFAfterChunk = 1 << 7;
-const uint32_t kLenientOptionalCRBeforeLF = 1 << 8;
-const uint32_t kLenientSpacesAfterChunkSize = 1 << 9;
-const uint32_t kLenientAll =
-    kLenientHeaders | kLenientChunkedLength | kLenientKeepAlive |
-    kLenientTransferEncoding | kLenientVersion | kLenientDataAfterClose |
-    kLenientOptionalLFAfterCR | kLenientOptionalCRLFAfterChunk |
-    kLenientOptionalCRBeforeLF | kLenientSpacesAfterChunkSize;
-
-inline bool IsOWS(char c) {
-  return c == ' ' || c == '\t';
-}
+const size_t kMaxTrailerFieldsCount = 32;
 
 class BindingData : public BaseObject {
  public:
@@ -118,82 +87,56 @@ class BindingData : public BaseObject {
 };
 
 // helper class for the Parser
-struct StringPtr {
-  StringPtr() {
-    on_heap_ = false;
-    Reset();
-  }
-
-
-  ~StringPtr() {
-    Reset();
-  }
-
-
-  // If str_ does not point to a heap string yet, this function makes it do
-  // so. This is called at the end of each http_parser_execute() so as not
-  // to leak references. See issue #2438 and test-http-parser-bad-ref.js.
-  void Save() {
-    if (!on_heap_ && size_ > 0) {
-      char* s = new char[size_];
-      memcpy(s, str_, size_);
-      str_ = s;
-      on_heap_ = true;
-    }
-  }
-
-
-  void Reset() {
-    if (on_heap_) {
-      delete[] str_;
-      on_heap_ = false;
-    }
-
-    str_ = nullptr;
+struct Data {
+  Data() {
+    data_ = nullptr;
     size_ = 0;
   }
 
-
-  void Update(const char* str, size_t size) {
-    if (str_ == nullptr) {
-      str_ = str;
-    } else if (on_heap_ || str_ + size_ != str) {
-      // Non-consecutive input, make a copy on the heap.
-      // TODO(bnoordhuis) Use slab allocation, O(n) allocs is bad.
-      char* s = new char[size_ + size];
-      memcpy(s, str_, size_);
-      memcpy(s + size_, str, size);
-
-      if (on_heap_)
-        delete[] str_;
-      else
-        on_heap_ = true;
-
-      str_ = s;
-    }
-    size_ += size;
+  ~Data() {
+    Reset();
   }
 
+  void Reset() {
+    if (size_ == 0) {
+      return;
+    }
 
-  Local<String> ToString(Environment* env) const {
+    free(data_);
+    size_ = 0;
+  }
+
+  void Set(const unsigned char* str, size_t size) {
+    if (size_ > 0) {
+      free(data_);
+    }
+
+    data_ = UncheckedMalloc<unsigned char>(sizeof(unsigned char) * size);
+    size_ = size;
+    memcpy(data_, str, size_);
+  }
+
+  Local<String> ToString(Isolate* isolate) const {
     if (size_ != 0)
-      return OneByteString(env->isolate(), str_, size_);
+      return OneByteString(isolate, data_, size_);
     else
-      return String::Empty(env->isolate());
+      return String::Empty(isolate);
   }
 
+  Local<String> ToTrimmedString(Isolate* isolate) const {
+    if (size_ == 0)
+      return String::Empty(isolate);
 
-  // Strip trailing OWS (SPC or HTAB) from string.
-  Local<String> ToTrimmedString(Environment* env) {
-    while (size_ > 0 && IsOWS(str_[size_ - 1])) {
-      size_--;
+    size_t size = size_;
+    while (size > 0 && (data_[size - 1] == ' ' || data_[size - 1] == '\t')) {
+      size--;
     }
-    return ToString(env);
+
+    return OneByteString(isolate, data_, size);
   }
 
 
-  const char* str_;
-  bool on_heap_;
+  unsigned char* data_;
   size_t size_;
 };
 
@@ -207,13 +150,18 @@ class ConnectionsList : public BaseObject {
  public:
     static void New(const FunctionCallbackInfo<Value>& args);
 
+
     static void All(const FunctionCallbackInfo<Value>& args);
+
 
     static void Idle(const FunctionCallbackInfo<Value>& args);
 
+
     static void Active(const FunctionCallbackInfo<Value>& args);
 
+
     static void Expired(const FunctionCallbackInfo<Value>& args);
+
 
     void Push(Parser* parser) {
       all_connections_.insert(parser);
@@ -261,7 +209,8 @@ class Parser : public AsyncWrap, public StreamListener {
   SET_MEMORY_INFO_NAME(Parser)
   SET_SELF_SIZE(Parser)
 
-  int on_message_begin() {
+  intptr_t on_message_start(const milo::Parser* parser,
+                            const unsigned char* data, uintptr_t length) {
     // Important: Pop from the lists BEFORE resetting the last_message_start_
     // otherwise std::set.erase will fail.
     if (connectionsList_ != nullptr) {
@@ -269,11 +218,18 @@ class Parser : public AsyncWrap, public StreamListener {
       connectionsList_->PopActive(this);
     }
 
-    num_fields_ = num_values_ = 0;
+    num_header_fields_ = num_header_values_ = 0;
+    num_trailer_fields_ = num_trailer_values_ = 0;
     headers_completed_ = false;
+    trailers_completed_ = false;
+    headers_flushed_ = false;
+    trailers_flushed_ = false;
     last_message_start_ = uv_hrtime();
+
     url_.Reset();
     status_message_.Reset();
+    error_code_.Reset();
+    error_reason_.Reset();
 
     if (connectionsList_ != nullptr) {
       connectionsList_->Push(this);
@@ -282,6 +238,7 @@ class Parser : public AsyncWrap, public StreamListener {
 
     Local<Value> cb = object()->Get(env()->context(), kOnMessageBegin)
                               .ToLocalChecked();
+
     if (cb->IsFunction()) {
       InternalCallbackScope callback_scope(
         this, InternalCallbackScope::kSkipTaskQueues);
@@ -295,80 +252,82 @@ class Parser : public AsyncWrap, public StreamListener {
     return 0;
   }
 
-
-  int on_url(const char* at, size_t length) {
+  intptr_t on_url(const milo::Parser* parser,
+                  const unsigned char* data, uintptr_t length) {
     int rv = TrackHeader(length);
     if (rv != 0) {
-      return rv;
+      return 1;
     }
 
-    url_.Update(at, length);
-    return 0;
-  }
-
-
-  int on_status(const char* at, size_t length) {
-    int rv = TrackHeader(length);
-    if (rv != 0) {
-      return rv;
-    }
-
-    status_message_.Update(at, length);
-    return 0;
-  }
-
-
-  int on_header_field(const char* at, size_t length) {
-    int rv = TrackHeader(length);
-    if (rv != 0) {
-      return rv;
-    }
-
-    if (num_fields_ == num_values_) {
-      // start of new field name
-      num_fields_++;
-      if (num_fields_ == kMaxHeaderFieldsCount) {
-        // ran out of space - flush to javascript land
-        Flush();
-        num_fields_ = 1;
-        num_values_ = 0;
-      }
-      fields_[num_fields_ - 1].Reset();
-    }
-
-    CHECK_LT(num_fields_, kMaxHeaderFieldsCount);
-    CHECK_EQ(num_fields_, num_values_ + 1);
-
-    fields_[num_fields_ - 1].Update(at, length);
+    url_.Set(data, length);
 
     return 0;
   }
 
 
-  int on_header_value(const char* at, size_t length) {
+  intptr_t on_reason(const milo::Parser* parser,
+                     const unsigned char* data, uintptr_t length) {
     int rv = TrackHeader(length);
     if (rv != 0) {
-      return rv;
+      return 1;
     }
 
-    if (num_values_ != num_fields_) {
-      // start of new header value
-      num_values_++;
-      values_[num_values_ - 1].Reset();
-    }
-
-    CHECK_LT(num_values_, arraysize(values_));
-    CHECK_EQ(num_values_, num_fields_);
-
-    values_[num_values_ - 1].Update(at, length);
+    status_message_.Set(data, length);
 
     return 0;
   }
 
 
-  int on_headers_complete() {
+  intptr_t on_header_name(const milo::Parser* parser,
+                           const unsigned char* data, uintptr_t length) {
+    int rv = TrackHeader(length);
+    if (rv != 0) {
+      return rv;
+    }
+
+    CHECK_EQ(num_header_fields_, num_header_values_);
+
+    // start of new field name
+    num_header_fields_++;
+    if (num_header_fields_ == kMaxHeaderFieldsCount) {
+      // ran out of space - flush to javascript land
+      FlushHeaders();
+      num_header_fields_ = 1;
+      num_header_values_ = 0;
+    }
+
+    header_fields_[num_header_fields_ - 1].Set(data, length);
+
+    CHECK_LT(num_header_fields_, kMaxHeaderFieldsCount);
+    CHECK_EQ(num_header_fields_, num_header_values_ + 1);
+
+    return 0;
+  }
+
+
+  intptr_t on_header_value(const milo::Parser* parser,
+                           const unsigned char* data, uintptr_t length) {
+    int rv = TrackHeader(length);
+    if (rv != 0) {
+      return rv;
+    }
+
+    CHECK_NE(num_header_values_, num_header_fields_);
+
+    num_header_values_++;
+    header_values_[num_header_values_ - 1].Set(data, length);
+
+    CHECK_LT(num_header_values_, arraysize(header_values_));
+    CHECK_EQ(num_header_values_, num_header_fields_);
+
+    return 0;
+  }
+
+
+  intptr_t on_headers(const milo::Parser* parser,
+                               const unsigned char* data, uintptr_t length) {
     headers_completed_ = true;
-    header_nread_ = 0;
+    heades_nread_ = 0;
 
     // Arguments for the on-headers-complete javascript callback. This
     // list needs to be kept in sync with the actual argument list for
@@ -394,47 +353,46 @@ class Parser : public AsyncWrap, public StreamListener {
     if (!cb->IsFunction())
       return 0;
 
-    Local<Value> undefined = Undefined(env()->isolate());
+    Isolate* isolate = env()->isolate();
+
+    Local<Value> undefined = Undefined(isolate);
     for (size_t i = 0; i < arraysize(argv); i++)
       argv[i] = undefined;
 
-    if (have_flushed_) {
+    if (headers_flushed_) {
       // Slow case, flush remaining headers.
-      Flush();
+      FlushHeaders();
     } else {
       // Fast case, pass headers and URL to JS land.
       argv[A_HEADERS] = CreateHeaders();
-      if (parser_.type == HTTP_REQUEST)
-        argv[A_URL] = url_.ToString(env());
+      if (parser_->mode == milo::REQUEST)
+        argv[A_URL] = url_.ToString(isolate);
     }
 
-    num_fields_ = 0;
-    num_values_ = 0;
+    num_header_fields_ = 0;
+    num_header_values_ = 0;
 
     // METHOD
-    if (parser_.type == HTTP_REQUEST) {
+    if (parser_->mode == milo::REQUEST) {
       argv[A_METHOD] =
-          Uint32::NewFromUnsigned(env()->isolate(), parser_.method);
-    }
-
+          Uint32::NewFromUnsigned(isolate, parser_->method);
+    } else {
     // STATUS
-    if (parser_.type == HTTP_RESPONSE) {
       argv[A_STATUS_CODE] =
-          Integer::New(env()->isolate(), parser_.status_code);
-      argv[A_STATUS_MESSAGE] = status_message_.ToString(env());
+          Integer::New(isolate, parser_->status);
+      argv[A_STATUS_MESSAGE] = status_message_.ToString(isolate);
     }
 
     // VERSION
-    argv[A_VERSION_MAJOR] = Integer::New(env()->isolate(), parser_.http_major);
-    argv[A_VERSION_MINOR] = Integer::New(env()->isolate(), parser_.http_minor);
+    argv[A_VERSION_MAJOR] = Integer::New(isolate, parser_->version_major);
+    argv[A_VERSION_MINOR] = Integer::New(isolate, parser_->version_minor);
 
-    bool should_keep_alive;
-    should_keep_alive = llhttp_should_keep_alive(&parser_);
+    // KEEP ALIVE
+    argv[A_SHOULD_KEEP_ALIVE] = Boolean::New(isolate, parser_->connection !=
+                                                 milo::CONNECTION_CLOSE);
 
-    argv[A_SHOULD_KEEP_ALIVE] =
-        Boolean::New(env()->isolate(), should_keep_alive);
-
-    argv[A_UPGRADE] = Boolean::New(env()->isolate(), parser_.upgrade);
+    argv[A_UPGRADE] = Boolean::New(isolate, parser_->is_connect ||
+                                   parser_->has_upgrade);
 
     MaybeLocal<Value> head_response;
     {
@@ -445,7 +403,7 @@ class Parser : public AsyncWrap, public StreamListener {
       if (head_response.IsEmpty()) callback_scope.MarkAsFailed();
     }
 
-    int64_t val;
+    int64_t val = 0;
 
     if (head_response.IsEmpty() || !head_response.ToLocalChecked()
                                         ->IntegerValue(env()->context())
@@ -454,11 +412,16 @@ class Parser : public AsyncWrap, public StreamListener {
       return -1;
     }
 
-    return static_cast<int>(val);
+    if (val > 0) {
+      parser_->skip_body = 1;
+    }
+
+    return static_cast<intptr_t>(0);
   }
 
 
-  int on_body(const char* at, size_t length) {
+  intptr_t on_body(const milo::Parser* parser,
+                   const unsigned char* data, uintptr_t length) {
     if (length == 0)
       return 0;
 
@@ -470,21 +433,23 @@ class Parser : public AsyncWrap, public StreamListener {
     if (!cb->IsFunction())
       return 0;
 
-    Local<Value> buffer = Buffer::Copy(env, at, length).ToLocalChecked();
+    Local<Value> buffer = Buffer::Copy(env,
+                                       reinterpret_cast<const char*>(data),
+                                       length).ToLocalChecked();
 
     MaybeLocal<Value> r = MakeCallback(cb.As<Function>(), 1, &buffer);
 
     if (r.IsEmpty()) {
       got_exception_ = true;
-      llhttp_set_error_reason(&parser_, "HPE_JS_EXCEPTION:JS Exception");
-      return HPE_USER;
+      return 1;
     }
 
     return 0;
   }
 
 
-  int on_message_complete() {
+  intptr_t on_message_complete(const milo::Parser* parser,
+                               const unsigned char* data, uintptr_t length) {
     HandleScope scope(env()->isolate());
 
     // Important: Pop from the lists BEFORE resetting the last_message_start_
@@ -500,8 +465,8 @@ class Parser : public AsyncWrap, public StreamListener {
       connectionsList_->Push(this);
     }
 
-    if (num_fields_)
-      Flush();  // Flush trailing HTTP headers.
+    if (trailers_flushed_)
+      FlushTrailers();  // Flush trailing HTTP trailers.
 
     Local<Object> obj = object();
     Local<Value> cb = obj->Get(env()->context(),
@@ -520,24 +485,105 @@ class Parser : public AsyncWrap, public StreamListener {
 
     if (r.IsEmpty()) {
       got_exception_ = true;
-      return -1;
+      return 1;
     }
 
     return 0;
   }
 
-  // Reset nread for the next chunk
-  int on_chunk_header() {
-    header_nread_ = 0;
+
+  intptr_t on_trailer_name(const milo::Parser* parser,
+                            const unsigned char* data, uintptr_t length) {
+    int rv = TrackTrailer(length);
+    if (rv != 0) {
+      return rv;
+    }
+
+    // start of new field name
+    num_trailer_fields_++;
+    if (num_trailer_fields_ == kMaxTrailerFieldsCount) {
+      // ran out of space - flush to javascript land
+      FlushTrailers();
+      num_trailer_fields_ = 1;
+      num_trailer_values_ = 0;
+    }
+
+    trailer_fields_[num_trailer_fields_ - 1].Set(data, length);
+
+    CHECK_LT(num_trailer_fields_, kMaxTrailerFieldsCount);
+    CHECK_EQ(num_trailer_fields_, num_trailer_values_ + 1);
+
     return 0;
   }
 
 
-  // Reset nread for the next chunk
-  int on_chunk_complete() {
-    header_nread_ = 0;
+  intptr_t on_trailer_value(const milo::Parser* parser,
+                            const unsigned char* data, uintptr_t length) {
+    int rv = TrackTrailer(length);
+    if (rv != 0) {
+      return rv;
+    }
+
+    CHECK_NE(num_trailer_values_, num_trailer_fields_);
+
+    num_trailer_values_++;
+    trailer_values_[num_trailer_values_ - 1].Set(data, length);
+
+    CHECK_LT(num_trailer_values_, arraysize(trailer_values_));
+    CHECK_EQ(num_trailer_values_, num_trailer_fields_);
+
     return 0;
   }
+
+
+  intptr_t on_trailers(const milo::Parser* parser,
+                                const unsigned char* data, uintptr_t length) {
+    trailers_completed_ = true;
+    trailers_nread_ = 0;
+
+    Local<Value> argv[1];
+    Local<Object> obj = object();
+    Local<Value> cb = obj->Get(env()->context(),
+                               kOnTrailersComplete).ToLocalChecked();
+
+    if (!cb->IsFunction())
+      return 0;
+
+    Local<Value> undefined = Undefined(env()->isolate());
+
+    if (trailers_flushed_) {
+      // Slow case, flush remaining headers.
+      FlushTrailers();
+      argv[0] = undefined;
+    } else {
+      // Fast case, pass headers and URL to JS land.
+      argv[0] = CreateTrailers();
+    }
+
+    num_trailer_fields_ = 0;
+    num_trailer_values_ = 0;
+
+    MaybeLocal<Value> trailer_response;
+    {
+      InternalCallbackScope callback_scope(
+          this, InternalCallbackScope::kSkipTaskQueues);
+      trailer_response = cb.As<Function>()->Call(
+          env()->context(), object(), arraysize(argv), argv);
+      if (trailer_response.IsEmpty()) callback_scope.MarkAsFailed();
+    }
+
+    int64_t val;
+
+    if (trailer_response.IsEmpty() || !trailer_response.ToLocalChecked()
+                                        ->IntegerValue(env()->context())
+                                        .To(&val)) {
+      got_exception_ = true;
+      return -1;
+    }
+
+    return static_cast<int>(val);
+  }
+
 
   static void New(const FunctionCallbackInfo<Value>& args) {
     BindingData* binding_data = Realm::GetBindingData<BindingData>(args);
@@ -563,6 +609,7 @@ class Parser : public AsyncWrap, public StreamListener {
     parser->EmitDestroy();
   }
 
+
   static void Remove(const FunctionCallbackInfo<Value>& args) {
     Parser* parser;
     ASSIGN_OR_RETURN_UNWRAP(&parser, args.Holder());
@@ -573,27 +620,42 @@ class Parser : public AsyncWrap, public StreamListener {
     }
   }
 
-  void Save() {
-    url_.Save();
-    status_message_.Save();
-
-    for (size_t i = 0; i < num_fields_; i++) {
-      fields_[i].Save();
-    }
-
-    for (size_t i = 0; i < num_values_; i++) {
-      values_[i].Save();
-    }
+  void Reset(bool keep_position) {
+    milo::milo_reset(parser_, keep_position);
+    heades_nread_ = 0;
+    trailers_nread_ = 0;
+    url_.Reset();
+    status_message_.Reset();
+    error_code_.Reset();
+    error_reason_.Reset();
+    num_header_fields_ = 0;
+    num_header_values_ = 0;
+    num_trailer_fields_ = 0;
+    num_trailer_values_ = 0;
+    headers_flushed_ = false;
+    trailers_flushed_ = false;
+    got_exception_ = false;
+    headers_completed_ = false;
+    trailers_completed_ = false;
   }
 
   // var bytesParsed = parser->execute(buffer);
   static void Execute(const FunctionCallbackInfo<Value>& args) {
     Parser* parser;
+
     ASSIGN_OR_RETURN_UNWRAP(&parser, args.Holder());
+    CHECK(args[1]->IsUint32());
+
+    if (args.Length() > 2 && args[2]->IsTrue()) {
+      CHECK(args[2]->IsTrue());
+      parser->parser_->is_connect = args[2]->IsTrue() ? 1 : 0;
+    }
 
     ArrayBufferViewContents<char> buffer(args[0]);
+    size_t limit = static_cast<size_t>(args[1].As<Number>()->Value());
 
-    Local<Value> ret = parser->Execute(buffer.data(), buffer.length());
+    Local<Value> ret = parser->Execute(buffer.data(),
+                                       limit > 0 ? limit : buffer.length());
 
     if (!ret.IsEmpty())
       args.GetReturnValue().Set(ret);
@@ -615,7 +677,6 @@ class Parser : public AsyncWrap, public StreamListener {
     Environment* env = Environment::GetCurrent(args);
 
     uint64_t max_http_header_size = 0;
-    uint32_t lenient_flags = kLenientNone;
     ConnectionsList* connectionsList = nullptr;
 
     CHECK(args[0]->IsInt32());
@@ -630,33 +691,27 @@ class Parser : public AsyncWrap, public StreamListener {
       max_http_header_size = env->options()->max_http_header_size;
     }
 
-    if (args.Length() > 3) {
-      CHECK(args[3]->IsInt32());
-      lenient_flags = args[3].As<Int32>()->Value();
+    if (args.Length() > 3 && !args[3]->IsNullOrUndefined()) {
+      CHECK(args[3]->IsObject());
+      ASSIGN_OR_RETURN_UNWRAP(&connectionsList, args[3]);
     }
 
-    if (args.Length() > 4 && !args[4]->IsNullOrUndefined()) {
-      CHECK(args[4]->IsObject());
-      ASSIGN_OR_RETURN_UNWRAP(&connectionsList, args[4]);
-    }
+    intptr_t type = static_cast<intptr_t>(args[0].As<Int32>()->Value());
 
-    llhttp_type_t type =
-        static_cast<llhttp_type_t>(args[0].As<Int32>()->Value());
-
-    CHECK(type == HTTP_REQUEST || type == HTTP_RESPONSE);
+    CHECK(type == milo::REQUEST || type == milo::RESPONSE);
     Parser* parser;
     ASSIGN_OR_RETURN_UNWRAP(&parser, args.Holder());
     // Should always be called from the same context.
     CHECK_EQ(env, parser->env());
 
     AsyncWrap::ProviderType provider =
-        (type == HTTP_REQUEST ?
+        (type == milo::REQUEST ?
             AsyncWrap::PROVIDER_HTTPINCOMINGMESSAGE
             : AsyncWrap::PROVIDER_HTTPCLIENTREQUEST);
 
     parser->set_provider_type(provider);
     parser->AsyncReset(args[1].As<Object>());
-    parser->Init(type, max_http_header_size, lenient_flags);
+    parser->Init(type, max_http_header_size);
 
     if (connectionsList != nullptr) {
       parser->connectionsList_ = connectionsList;
@@ -675,6 +730,17 @@ class Parser : public AsyncWrap, public StreamListener {
     }
   }
 
+
+  static void Reset(const FunctionCallbackInfo<Value>& args) {
+    Parser* parser;
+
+    ASSIGN_OR_RETURN_UNWRAP(&parser, args.Holder());
+    CHECK(args[0]->IsBoolean());
+
+    parser->Reset(args[0].As<Boolean>()->Value());
+  }
+
+
   template <bool should_pause>
   static void Pause(const FunctionCallbackInfo<Value>& args) {
     Environment* env = Environment::GetCurrent(args);
@@ -684,9 +750,9 @@ class Parser : public AsyncWrap, public StreamListener {
     CHECK_EQ(env, parser->env());
 
     if constexpr (should_pause) {
-      llhttp_pause(&parser->parser_);
+      milo::milo_pause(parser->parser_);
     } else {
-      llhttp_resume(&parser->parser_);
+      milo::milo_resume(parser->parser_);
     }
   }
 
@@ -743,6 +809,13 @@ class Parser : public AsyncWrap, public StreamListener {
     ASSIGN_OR_RETURN_UNWRAP(&parser, args.Holder());
 
     args.GetReturnValue().Set(parser->headers_completed_);
+  }
+
+  static void TrailersCompleted(const FunctionCallbackInfo<Value>& args) {
+    Parser* parser;
+    ASSIGN_OR_RETURN_UNWRAP(&parser, args.Holder());
+
+    args.GetReturnValue().Set(parser->trailers_completed_);
   }
 
  protected:
@@ -807,39 +880,38 @@ class Parser : public AsyncWrap, public StreamListener {
   }
 
 
+  template <typename P,
+            intptr_t(P::*Member)(const milo::Parser* parser,
+                                 const unsigned char* data, uintptr_t len)>
+  static intptr_t CB(const milo::Parser* parser,
+                                 const unsigned char* data, uintptr_t len) {
+    Parser* container = reinterpret_cast<Parser*>(parser->owner);
+    return (container->*Member)(parser, data, len);
+  }
+
   Local<Value> Execute(const char* data, size_t len) {
-    EscapableHandleScope scope(env()->isolate());
+    Environment* environment = env();
+    Isolate* isolate = env()->isolate();
+    EscapableHandleScope scope(isolate);
 
     current_buffer_len_ = len;
     current_buffer_data_ = data;
     got_exception_ = false;
 
-    llhttp_errno_t err;
+    uintptr_t nread = 0;
+    // Finishing can fail so track the previous error
+    u_int8_t previous_err = parser_->error_code;
 
-    if (data == nullptr) {
-      err = llhttp_finish(&parser_);
+    if (data != nullptr) {
+      nread = milo::milo_parse(
+                               parser_,
+                               reinterpret_cast<const unsigned char *>(data),
+                               len);
     } else {
-      err = llhttp_execute(&parser_, data, len);
-      Save();
+      milo::milo_finish(parser_);
     }
 
-    // Calculate bytes read and resume after Upgrade/CONNECT pause
-    size_t nread = len;
-    if (err != HPE_OK) {
-      nread = llhttp_get_error_pos(&parser_) - data;
-
-      // This isn't a real pause, just a way to stop parsing early.
-      if (err == HPE_PAUSED_UPGRADE) {
-        err = HPE_OK;
-        llhttp_resume_after_upgrade(&parser_);
-      }
-    }
-
-    // Apply pending pause
-    if (pending_pause_) {
-      pending_pause_ = false;
-      llhttp_pause(&parser_);
-    }
+    u_int8_t err = parser_->error_code;
 
     current_buffer_len_ = 0;
     current_buffer_data_ = nullptr;
@@ -848,35 +920,57 @@ class Parser : public AsyncWrap, public StreamListener {
     if (got_exception_)
       return scope.Escape(Local<Value>());
 
-    Local<Integer> nread_obj = Integer::New(env()->isolate(), nread);
+    Local<Integer> nread_obj = Integer::New(isolate, nread);
 
     // If there was a parse error in one of the callbacks
     // TODO(bnoordhuis) What if there is an error on EOF?
-    if (!parser_.upgrade && err != HPE_OK) {
-      Local<Value> e = Exception::Error(env()->parse_error_string());
-      Local<Object> obj = e->ToObject(env()->isolate()->GetCurrentContext())
+    if (err != milo::ERROR_NONE && err != previous_err) {
+      Local<Value> e = Exception::Error(environment->
+                                        parse_error_string());
+      Local<Object> obj = e->ToObject(environment->
+                                      isolate()->GetCurrentContext())
         .ToLocalChecked();
-      obj->Set(env()->context(),
-               env()->bytes_parsed_string(),
+      obj->Set(environment->context(),
+               environment->bytes_parsed_string(),
                nread_obj).Check();
-      const char* errno_reason = llhttp_get_error_reason(&parser_);
 
       Local<String> code;
       Local<String> reason;
-      if (err == HPE_USER) {
-        const char* colon = strchr(errno_reason, ':');
-        CHECK_NOT_NULL(colon);
-        code = OneByteString(env()->isolate(),
-                             errno_reason,
-                             static_cast<int>(colon - errno_reason));
-        reason = OneByteString(env()->isolate(), colon + 1);
+
+      if (error_code_.size_ > 0) {
+        code = error_code_.ToString(isolate);
+        reason = error_reason_.ToString(isolate);
       } else {
-        code = OneByteString(env()->isolate(), llhttp_errno_name(err));
-        reason = OneByteString(env()->isolate(), errno_reason);
+        if (
+          err == milo::ERROR_UNEXPECTED_TRANSFER_ENCODING ||
+          err == milo::ERROR_INVALID_CONTENT_LENGTH
+        ) {
+          code = OneByteString(environment->isolate(),
+                               "HPE_UNEXPECTED_CONTENT_LENGTH");
+        } else {
+          const char* error_code_string =
+              reinterpret_cast<const char*>(
+                  milo::milo_error_code_string(parser_));
+          size_t error_code_len = strlen(error_code_string) + 6;
+          char* error_code = Malloc(error_code_len);
+          snprintf(error_code, error_code_len, "MILO_%s", error_code_string);
+          code = OneByteString(environment->isolate(), error_code);
+          free(error_code);
+          milo::milo_free_string(
+              reinterpret_cast<const unsigned char*>(error_code_string));
+        }
+
+        const unsigned char* errno_reason =
+            milo::milo_error_description_string(parser_);
+        reason = OneByteString(environment->isolate(), errno_reason);
+        milo::milo_free_string(errno_reason);
       }
 
-      obj->Set(env()->context(), env()->code_string(), code).Check();
-      obj->Set(env()->context(), env()->reason_string(), reason).Check();
+      obj->Set(environment->context(),
+               environment->code_string(), code).Check();
+      obj->Set(environment->context(),
+               environment->reason_string(), reason).Check();
+
       return scope.Escape(e);
     }
 
@@ -884,24 +978,43 @@ class Parser : public AsyncWrap, public StreamListener {
     if (data == nullptr) {
       return scope.Escape(Local<Value>());
     }
+
     return scope.Escape(nread_obj);
   }
 
+
   Local<Array> CreateHeaders() {
+    Isolate* isolate = env()->isolate();
+
     // There could be extra entries but the max size should be fixed
     Local<Value> headers_v[kMaxHeaderFieldsCount * 2];
 
-    for (size_t i = 0; i < num_values_; ++i) {
-      headers_v[i * 2] = fields_[i].ToString(env());
-      headers_v[i * 2 + 1] = values_[i].ToTrimmedString(env());
+    for (size_t i = 0; i < num_header_values_; ++i) {
+      headers_v[i * 2] = header_fields_[i].ToString(isolate);
+      headers_v[i * 2 + 1] = header_values_[i].ToTrimmedString(isolate);
     }
 
-    return Array::New(env()->isolate(), headers_v, num_values_ * 2);
+    return Array::New(env()->isolate(), headers_v, num_header_values_ * 2);
+  }
+
+
+  Local<Array> CreateTrailers() {
+    Isolate* isolate = env()->isolate();
+
+    // There could be extra entries but the max size should be fixed
+    Local<Value> trailers_v[kMaxTrailerFieldsCount * 2];
+
+    for (size_t i = 0; i < num_trailer_values_; ++i) {
+      trailers_v[i * 2] = trailer_fields_[i].ToString(isolate);
+      trailers_v[i * 2 + 1] = trailer_values_[i].ToTrimmedString(isolate);
+    }
+
+    return Array::New(env()->isolate(), trailers_v, num_trailer_values_ * 2);
   }
 
 
   // spill headers and request path to JS land
-  void Flush() {
+  void FlushHeaders() {
     HandleScope scope(env()->isolate());
 
     Local<Object> obj = object();
@@ -912,7 +1025,7 @@ class Parser : public AsyncWrap, public StreamListener {
 
     Local<Value> argv[2] = {
       CreateHeaders(),
-      url_.ToString(env())
+      url_.ToString(env()->isolate())
     };
 
     MaybeLocal<Value> r = MakeCallback(cb.As<Function>(),
@@ -923,75 +1036,147 @@ class Parser : public AsyncWrap, public StreamListener {
       got_exception_ = true;
 
     url_.Reset();
-    have_flushed_ = true;
+    headers_flushed_ = true;
   }
 
+  // spill trailers to JS land
+  void FlushTrailers() {
+    HandleScope scope(env()->isolate());
 
-  void Init(llhttp_type_t type, uint64_t max_http_header_size,
-            uint32_t lenient_flags) {
-    llhttp_init(&parser_, type, &settings);
+    Local<Object> obj = object();
+    Local<Value> cb = obj->Get(env()->context(), kOnTrailers).ToLocalChecked();
 
-    if (lenient_flags & kLenientHeaders) {
-      llhttp_set_lenient_headers(&parser_, 1);
-    }
-    if (lenient_flags & kLenientChunkedLength) {
-      llhttp_set_lenient_chunked_length(&parser_, 1);
-    }
-    if (lenient_flags & kLenientKeepAlive) {
-      llhttp_set_lenient_keep_alive(&parser_, 1);
-    }
-    if (lenient_flags & kLenientTransferEncoding) {
-      llhttp_set_lenient_transfer_encoding(&parser_, 1);
-    }
-    if (lenient_flags & kLenientVersion) {
-      llhttp_set_lenient_version(&parser_, 1);
-    }
-    if (lenient_flags & kLenientDataAfterClose) {
-      llhttp_set_lenient_data_after_close(&parser_, 1);
-    }
-    if (lenient_flags & kLenientOptionalLFAfterCR) {
-      llhttp_set_lenient_optional_lf_after_cr(&parser_, 1);
-    }
-    if (lenient_flags & kLenientOptionalCRLFAfterChunk) {
-      llhttp_set_lenient_optional_crlf_after_chunk(&parser_, 1);
-    }
-    if (lenient_flags & kLenientOptionalCRBeforeLF) {
-      llhttp_set_lenient_optional_cr_before_lf(&parser_, 1);
-    }
-    if (lenient_flags & kLenientSpacesAfterChunkSize) {
-      llhttp_set_lenient_spaces_after_chunk_size(&parser_, 1);
-    }
+    if (!cb->IsFunction())
+      return;
 
-    header_nread_ = 0;
+    Local<Value> argv[1] = {
+      CreateTrailers(),
+    };
+
+    MaybeLocal<Value> r = MakeCallback(cb.As<Function>(),
+                                       arraysize(argv),
+                                       argv);
+
+    if (r.IsEmpty())
+      got_exception_ = true;
+
+    trailers_flushed_ = true;
+  }
+
+  void Init(intptr_t type, uint64_t max_http_header_size) {
+    parser_ = milo::milo_create();
+    heades_nread_ = 0;
+    trailers_nread_ = 0;
     url_.Reset();
     status_message_.Reset();
-    num_fields_ = 0;
-    num_values_ = 0;
-    have_flushed_ = false;
+    error_code_.Reset();
+    error_reason_.Reset();
+    num_header_fields_ = 0;
+    num_header_values_ = 0;
+    num_trailer_fields_ = 0;
+    num_trailer_values_ = 0;
+    headers_flushed_ = false;
+    trailers_flushed_ = false;
     got_exception_ = false;
     headers_completed_ = false;
+    trailers_completed_ = false;
     max_http_header_size_ = max_http_header_size;
+    max_http_trailer_size_ = max_http_header_size;
+
+    InitParser(type);
   }
 
 
+  void InitParser(intptr_t type) {
+    parser_->owner = this;
+    parser_->mode = type;
+    parser_->callbacks.on_message_start = CB<Parser, &Parser::on_message_start>;
+    parser_->callbacks.on_url = CB<Parser, &Parser::on_url>;
+    parser_->callbacks.on_reason = CB<Parser, &Parser::on_reason>;
+    parser_->callbacks.on_header_name = CB<Parser, &Parser::on_header_name>;
+    parser_->callbacks.on_header_value = CB<Parser, &Parser::on_header_value>;
+    parser_->callbacks.on_headers = CB<Parser, &Parser::on_headers>;
+    parser_->callbacks.on_data = CB<Parser, &Parser::on_body>;
+    parser_->callbacks.on_trailer_name = CB<Parser, &Parser::on_trailer_name>;
+    parser_->callbacks.on_trailer_value = CB<Parser, &Parser::on_trailer_value>;
+    parser_->callbacks.on_trailers = CB<Parser, &Parser::on_trailers>;
+    parser_->callbacks.on_message_complete =
+        CB<Parser, &Parser::on_message_complete>;
+
+    // Important - Do not remove the code below, only comment it out.
+    // This enables to track Milo state change when using its debug version.
+    // parser_->callbacks.after_state_change =
+    //                              [](milo::Parser* p,
+    //                                 const unsigned char* data,
+    //                                 uintptr_t length) -> intptr_t {
+    //   const unsigned char* state = milo::get_state_string(p);
+    //   intptr_t type = p->message_type;
+
+    //   printf(
+    //     "%p[%s @ %lu] %s\n",
+    //     reinterpret_cast<void*>(p),
+    //     (type == milo::REQUEST
+    //        ? "REQ"
+    //        : (type == milo::RESPONSE ? "RES" : "---")),
+    //     p->position,
+    //     state
+    //   );
+
+    //   milo::milo_free_string(state);
+
+    //   return 0;
+    // };
+    // parser_->callbacks.on_error =
+    //                              [](milo::Parser* p,
+    //                                 const unsigned char* data,
+    //                                 uintptr_t length) -> intptr_t {
+    //   const unsigned char* error_code_string =
+    //       milo::get_error_code_string(p);
+    //   const unsigned char* error_description_string =
+    //       milo::get_error_description_string(p);
+    //   intptr_t type = p->message_type;
+
+    //   printf(
+    //     "%p[%s @ %lu] ERROR %s (%u): %s\n",
+    //     reinterpret_cast<void*>(p),
+    //     (type == milo::REQUEST
+    //        ? "REQ"
+    //        : (type == milo::RESPONSE ? "RES" : "---")),
+    //     p->position,
+    //     error_code_string,
+    //     static_cast<unsigned int>(p->error_code),
+    //     error_description_string
+    //   );
+
+    //   milo::milo_free_string(error_code_string);
+    //   milo::milo_free_string(error_description_string);
+
+    //   return 0;
+    // };
+  }
+
   int TrackHeader(size_t len) {
-    header_nread_ += len;
-    if (header_nread_ >= max_http_header_size_) {
-      llhttp_set_error_reason(&parser_, "HPE_HEADER_OVERFLOW:Header overflow");
-      return HPE_USER;
+    heades_nread_ += len;
+    if (heades_nread_ >= max_http_header_size_) {
+      error_code_.Set(
+          reinterpret_cast<const unsigned char*>("HPE_HEADER_OVERFLOW"), 19);
+      error_reason_.Set(
+          reinterpret_cast<const unsigned char*>("Header overflow"), 15);
+      return 1;
     }
     return 0;
   }
 
-
-  int MaybePause() {
-    if (!pending_pause_) {
-      return 0;
+  int TrackTrailer(size_t len) {
+    trailers_nread_ += len;
+    if (trailers_nread_ >= max_http_trailer_size_) {
+      error_code_.Set(
+          reinterpret_cast<const unsigned char*>("HPE_HEADER_OVERFLOW"), 19);
+      error_reason_.Set(
+          reinterpret_cast<const unsigned char*>("Header overflow"), 15);
+      return 1;
     }
-
-    pending_pause_ = false;
-    llhttp_set_error_reason(&parser_, "Paused in callback");
-    return HPE_PAUSED;
+    return 0;
   }
 
 
@@ -1003,45 +1188,34 @@ class Parser : public AsyncWrap, public StreamListener {
   }
 
 
-  llhttp_t parser_;
-  StringPtr fields_[kMaxHeaderFieldsCount];  // header fields
-  StringPtr values_[kMaxHeaderFieldsCount];  // header values
-  StringPtr url_;
-  StringPtr status_message_;
-  size_t num_fields_;
-  size_t num_values_;
-  bool have_flushed_;
+  milo::Parser* parser_;
+  Data header_fields_[kMaxHeaderFieldsCount];  // header fields
+  Data header_values_[kMaxHeaderFieldsCount];  // header values
+  Data trailer_fields_[kMaxTrailerFieldsCount];  // trailer fields
+  Data trailer_values_[kMaxTrailerFieldsCount];  // trailer values
+  Data url_;
+  Data status_message_;
+  Data error_code_;
+  Data error_reason_;
+  size_t num_header_fields_;
+  size_t num_header_values_;
+  size_t num_trailer_fields_;
+  size_t num_trailer_values_;
+  bool headers_flushed_;
+  bool trailers_flushed_;
   bool got_exception_;
   size_t current_buffer_len_;
   const char* current_buffer_data_;
   bool headers_completed_ = false;
-  bool pending_pause_ = false;
-  uint64_t header_nread_ = 0;
+  bool trailers_completed_ = false;
+  uint64_t heades_nread_ = 0;
+  uint64_t trailers_nread_ = 0;
   uint64_t max_http_header_size_;
+  uint64_t max_http_trailer_size_;
   uint64_t last_message_start_;
   ConnectionsList* connectionsList_;
 
   BaseObjectPtr<BindingData> binding_data_;
-
-  // These are helper functions for filling `http_parser_settings`, which turn
-  // a member function of Parser into a C-style HTTP parser callback.
-  template <typename Parser, Parser> struct Proxy;
-  template <typename Parser, typename ...Args, int (Parser::*Member)(Args...)>
-  struct Proxy<int (Parser::*)(Args...), Member> {
-    static int Raw(llhttp_t* p, Args ... args) {
-      Parser* parser = ContainerOf(&Parser::parser_, p);
-      int rv = (parser->*Member)(std::forward<Args>(args)...);
-      if (rv == 0) {
-        rv = parser->MaybePause();
-      }
-      return rv;
-    }
-  };
-
-  typedef int (Parser::*Call)();
-  typedef int (Parser::*DataCall)(const char* at, size_t length);
-
-  static const llhttp_settings_t settings;
 };
 
 bool ParserComparator::operator()(const Parser* lhs, const Parser* rhs) const {
@@ -1181,52 +1355,6 @@ void ConnectionsList::Expired(const FunctionCallbackInfo<Value>& args) {
       Array::New(isolate, result.data(), result.size()));
 }
 
-const llhttp_settings_t Parser::settings = {
-    Proxy<Call, &Parser::on_message_begin>::Raw,
-    Proxy<DataCall, &Parser::on_url>::Raw,
-    Proxy<DataCall, &Parser::on_status>::Raw,
-
-    // on_method
-    nullptr,
-    // on_version
-    nullptr,
-
-    Proxy<DataCall, &Parser::on_header_field>::Raw,
-    Proxy<DataCall, &Parser::on_header_value>::Raw,
-
-    // on_chunk_extension_name
-    nullptr,
-    // on_chunk_extension_value
-    nullptr,
-
-    Proxy<Call, &Parser::on_headers_complete>::Raw,
-    Proxy<DataCall, &Parser::on_body>::Raw,
-    Proxy<Call, &Parser::on_message_complete>::Raw,
-
-    // on_url_complete
-    nullptr,
-    // on_status_complete
-    nullptr,
-    // on_method_complete
-    nullptr,
-    // on_version_complete
-    nullptr,
-    // on_header_field_complete
-    nullptr,
-    // on_header_value_complete
-    nullptr,
-    // on_chunk_extension_name_complete
-    nullptr,
-    // on_chunk_extension_value_complete
-    nullptr,
-
-    Proxy<Call, &Parser::on_chunk_header>::Raw,
-    Proxy<Call, &Parser::on_chunk_complete>::Raw,
-
-    // on_reset,
-    nullptr,
-};
-
 void InitializeHttpParser(Local<Object> target,
                           Local<Value> unused,
                           Local<Context> context,
@@ -1241,9 +1369,9 @@ void InitializeHttpParser(Local<Object> target,
   t->InstanceTemplate()->SetInternalFieldCount(Parser::kInternalFieldCount);
 
   t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "REQUEST"),
-         Integer::New(env->isolate(), HTTP_REQUEST));
+         Integer::New(env->isolate(), milo::REQUEST));
   t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "RESPONSE"),
-         Integer::New(env->isolate(), HTTP_RESPONSE));
+         Integer::New(env->isolate(), milo::RESPONSE));
   t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kOnMessageBegin"),
          Integer::NewFromUnsigned(env->isolate(), kOnMessageBegin));
   t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kOnHeaders"),
@@ -1252,46 +1380,20 @@ void InitializeHttpParser(Local<Object> target,
          Integer::NewFromUnsigned(env->isolate(), kOnHeadersComplete));
   t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kOnBody"),
          Integer::NewFromUnsigned(env->isolate(), kOnBody));
+  t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kOnTrailers"),
+         Integer::NewFromUnsigned(env->isolate(), kOnTrailers));
+  t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kOnTrailersComplete"),
+         Integer::NewFromUnsigned(env->isolate(), kOnTrailersComplete));
   t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kOnMessageComplete"),
          Integer::NewFromUnsigned(env->isolate(), kOnMessageComplete));
   t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kOnExecute"),
          Integer::NewFromUnsigned(env->isolate(), kOnExecute));
-  t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kOnTimeout"),
-         Integer::NewFromUnsigned(env->isolate(), kOnTimeout));
-
-  t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kLenientNone"),
-         Integer::NewFromUnsigned(env->isolate(), kLenientNone));
-  t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kLenientHeaders"),
-         Integer::NewFromUnsigned(env->isolate(), kLenientHeaders));
-  t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kLenientChunkedLength"),
-         Integer::NewFromUnsigned(env->isolate(), kLenientChunkedLength));
-  t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kLenientKeepAlive"),
-         Integer::NewFromUnsigned(env->isolate(), kLenientKeepAlive));
-  t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kLenientTransferEncoding"),
-         Integer::NewFromUnsigned(env->isolate(), kLenientTransferEncoding));
-  t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kLenientVersion"),
-         Integer::NewFromUnsigned(env->isolate(), kLenientVersion));
-  t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kLenientDataAfterClose"),
-         Integer::NewFromUnsigned(env->isolate(), kLenientDataAfterClose));
-  t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kLenientOptionalLFAfterCR"),
-         Integer::NewFromUnsigned(env->isolate(), kLenientOptionalLFAfterCR));
-  t->Set(
-      FIXED_ONE_BYTE_STRING(env->isolate(), "kLenientOptionalCRLFAfterChunk"),
-      Integer::NewFromUnsigned(env->isolate(), kLenientOptionalCRLFAfterChunk));
-  t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kLenientOptionalCRBeforeLF"),
-         Integer::NewFromUnsigned(env->isolate(), kLenientOptionalCRBeforeLF));
-  t->Set(
-      FIXED_ONE_BYTE_STRING(env->isolate(), "kLenientSpacesAfterChunkSize"),
-      Integer::NewFromUnsigned(env->isolate(), kLenientSpacesAfterChunkSize));
-
-  t->Set(FIXED_ONE_BYTE_STRING(env->isolate(), "kLenientAll"),
-         Integer::NewFromUnsigned(env->isolate(), kLenientAll));
 
   Local<Array> methods = Array::New(env->isolate());
 #define V(num, name, string)                                                  \
     methods->Set(env->context(),                                              \
         num, FIXED_ONE_BYTE_STRING(env->isolate(), #string)).Check();
-  HTTP_METHOD_MAP(V)
+  MILO_METHODS_MAP(V)
 #undef V
   target->Set(env->context(),
               FIXED_ONE_BYTE_STRING(env->isolate(), "methods"),
@@ -1306,11 +1408,13 @@ void InitializeHttpParser(Local<Object> target,
   SetProtoMethod(isolate, t, "initialize", Parser::Initialize);
   SetProtoMethod(isolate, t, "pause", Parser::Pause<true>);
   SetProtoMethod(isolate, t, "resume", Parser::Pause<false>);
+  SetProtoMethod(isolate, t, "reset", Parser::Reset);
   SetProtoMethod(isolate, t, "consume", Parser::Consume);
   SetProtoMethod(isolate, t, "unconsume", Parser::Unconsume);
   SetProtoMethod(isolate, t, "getCurrentBuffer", Parser::GetCurrentBuffer);
   SetProtoMethod(isolate, t, "duration", Parser::Duration);
   SetProtoMethod(isolate, t, "headersCompleted", Parser::HeadersCompleted);
+  SetProtoMethod(isolate, t, "trailersCompleted", Parser::TrailersCompleted);
 
   SetConstructorFunction(context, target, "HTTPParser", t);
 

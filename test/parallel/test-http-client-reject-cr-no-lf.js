@@ -19,7 +19,7 @@ server.listen(0, () => {
   const req = http.get({ port: server.address().port }, common.mustNotCall());
   req.on('error', common.mustCall((err) => {
     assert.match(err.message, /^Parse Error/);
-    assert.strictEqual(err.code, 'HPE_LF_EXPECTED');
+    assert.strictEqual(err.code, 'MILO_UNEXPECTED_CHARACTER');
     server.close();
   }));
 });

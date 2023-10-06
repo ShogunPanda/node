@@ -13,8 +13,8 @@ const { NghttpError } = require('internal/http2/util');
 // Creating an http1 server here...
 const server = http.createServer(common.mustNotCall())
   .on('clientError', common.mustCall((error, socket) => {
-    assert.strictEqual(error.code, 'HPE_PAUSED_H2_UPGRADE');
-    assert.strictEqual(error.bytesParsed, 24);
+    assert.strictEqual(error.code, 'MILO_UNSUPPORTED_HTTP_VERSION');
+    assert.strictEqual(error.bytesParsed, 11);
     socket.write('HTTP/1.1 400 No H2 support\r\n\r\n');
 
     // Don't give client a chance to send a preamble.

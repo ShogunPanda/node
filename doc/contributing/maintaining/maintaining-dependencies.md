@@ -19,7 +19,7 @@ This a list of all the dependencies:
 * [histogram 0.11.8][]
 * [icu-small 73.2][]
 * [libuv 1.46.0][]
-* [llhttp 9.1.2][]
+* [milo 0.1.0][]
 * [minimatch 9.0.3][]
 * [nghttp2 1.56.0][]
 * [nghttp3 0.7.0][]
@@ -212,11 +212,11 @@ The [libuv](https://github.com/libuv/libuv) dependency is a
 multi-platform support library with a focus on asynchronous I/O.
 It was primarily developed for use by Node.js.
 
-### llhttp 9.1.2
+### milo 0.1.0
 
-The [llhttp](https://github.com/nodejs/llhttp) dependency is
+The [milo](https://github.com/ShogunPanda/milo) dependency is
 the http parser used by Node.js.
-See [maintaining-http][] for more informations.
+See \[maintaining-milo]\[] for more informations.
 
 ### minimatch 9.0.3
 
@@ -330,13 +330,13 @@ performance improvements not currently available in standard zlib.
 [histogram 0.11.8]: #histogram-0118
 [icu-small 73.2]: #icu-small-732
 [libuv 1.46.0]: #libuv-1460
-[llhttp 9.1.2]: #llhttp-912
 [maintaining-V8]: ./maintaining-V8.md
 [maintaining-cjs-module-lexer]: ./maintaining-cjs-module-lexer.md
 [maintaining-http]: ./maintaining-http.md
 [maintaining-icu]: ./maintaining-icu.md
 [maintaining-openssl]: ./maintaining-openssl.md
 [maintaining-web-assembly]: ./maintaining-web-assembly.md
+[milo 0.1.0]: #milo-010
 [minimatch 9.0.3]: #minimatch-903
 [nghttp2 1.56.0]: #nghttp2-1560
 [nghttp3 0.7.0]: #nghttp3-070

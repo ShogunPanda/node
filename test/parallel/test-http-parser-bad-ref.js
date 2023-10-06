@@ -54,7 +54,7 @@ function demoBug(part1, part2) {
     flushPool();
 
     console.log('parse the first part of the message');
-    parser.execute(b, 0, b.length);
+    parser.execute(b, b.length);
   })();
 
   flushPool();
@@ -63,7 +63,7 @@ function demoBug(part1, part2) {
     const b = Buffer.from(part2);
 
     console.log('parse the second part of the message');
-    parser.execute(b, 0, b.length);
+    parser.execute(b, b.length);
     parser.finish();
   })();
 

@@ -5,7 +5,7 @@
 #include "base64_version.h"
 #include "brotli/encode.h"
 #include "cjs_module_lexer_version.h"
-#include "llhttp.h"
+#include "milo.h"
 #include "nghttp2/nghttp2ver.h"
 #include "node.h"
 #include "simdutf.h"
@@ -83,13 +83,7 @@ Metadata::Versions::Versions() {
   modules = NODE_STRINGIFY(NODE_MODULE_VERSION);
   nghttp2 = NGHTTP2_VERSION;
   napi = NODE_STRINGIFY(NODE_API_SUPPORTED_VERSION_MAX);
-  llhttp =
-      NODE_STRINGIFY(LLHTTP_VERSION_MAJOR)
-      "."
-      NODE_STRINGIFY(LLHTTP_VERSION_MINOR)
-      "."
-      NODE_STRINGIFY(LLHTTP_VERSION_PATCH);
-
+  milo = MILO_VERSION;
   brotli =
     std::to_string(BrotliEncoderVersion() >> 24) +
     "." +

@@ -22,13 +22,13 @@ const net = require('net');
   const server = http.createServer(common.mustNotCall());
 
   server.on('clientError', common.mustCallAtLeast((err) => {
-    assert.strictEqual(err.code, 'HPE_INVALID_METHOD');
-    assert.strictEqual(err.rawPacket.toString(), '*');
+    assert.strictEqual(err.code, 'MILO_UNEXPECTED_CHARACTER');
+    assert.strictEqual(err.rawPacket.toString(), '* ');
 
     if (i === 20) {
       socket.end();
     } else {
-      socket.write('*');
+      socket.write('* ');
       i++;
     }
   }, 1));
@@ -37,7 +37,7 @@ const net = require('net');
     socket = net.createConnection({ port: server.address().port });
 
     socket.on('connect', () => {
-      socket.write('*');
+      socket.write('* ');
     });
 
     socket.on('close', () => {

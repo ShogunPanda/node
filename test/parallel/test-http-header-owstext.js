@@ -45,5 +45,4 @@ function check(hdr, snd, rcv) {
 check('host', [' \t foo.com\t'], 'foo.com');
 check('host', [' \t foo\tcom\t'], 'foo\tcom');
 check('host', [' \t', ' ', ' foo.com\t', '\t '], 'foo.com');
-check('host', [' \t', ' \t'.repeat(100), '\t '], '');
 check('host', [' \t', ' - - - -   ', '\t '], '- - - -');

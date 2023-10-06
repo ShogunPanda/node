@@ -474,10 +474,6 @@ EnvironmentOptionsParser::EnvironmentOptionsParser() {
             &EnvironmentOptions::heap_snapshot_near_heap_limit,
             kAllowedInEnvvar);
   AddOption("--http-parser", "", NoOp{}, kAllowedInEnvvar);
-  AddOption("--insecure-http-parser",
-            "use an insecure HTTP parser that accepts invalid HTTP headers",
-            &EnvironmentOptions::insecure_http_parser,
-            kAllowedInEnvvar);
   AddOption("--input-type",
             "set module type for string input",
             &EnvironmentOptions::input_type,

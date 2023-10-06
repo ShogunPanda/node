@@ -38,42 +38,37 @@ const server = http.createServer(function(req, res) {
   res.end(body);
 });
 
-function runAb(opts, callback) {
-  const command = `ab ${opts} http://127.0.0.1:${server.address().port}/`;
+function runAutocannon(requests, callback) {
+  const command = `autocannon -c 1 -n -j -a ${requests} http://127.0.0.1:${server.address().port}/`;
   exec(command, function(err, stdout, stderr) {
     if (err) {
       if (/ab|apr/i.test(stderr)) {
-        common.printSkipMessage(`problem spawning \`ab\`.\n${stderr}`);
+        console.log(stderr);
+        common.printSkipMessage(`problem spawning \`autocannon\`.\n${stderr}`);
         process.reallyExit(0);
       }
       throw err;
     }
 
-    let m = /Document Length:\s*(\d+) bytes/i.exec(stdout);
-    const documentLength = parseInt(m[1]);
+    const stats = JSON.parse(stdout);
 
-    m = /Complete requests:\s*(\d+)/i.exec(stdout);
-    const completeRequests = parseInt(m[1]);
-
-    m = /HTML transferred:\s*(\d+) bytes/i.exec(stdout);
-    const htmlTransferred = parseInt(m[1]);
-
-    assert.strictEqual(bodyLength, documentLength);
-    assert.strictEqual(completeRequests * documentLength, htmlTransferred);
+    assert.strictEqual(stats.errors, 0);
+    assert.strictEqual(stats.timeouts, 0);
+    assert.strictEqual(stats.statusCodeStats[200].count, requests);
 
     if (callback) callback();
   });
 }
 
 server.listen(0, common.mustCall(function() {
-  runAb('-c 1 -n 10', common.mustCall(function() {
-    console.log('-c 1 -n 10 okay');
+  runAutocannon(10, common.mustCall(function() {
+    // console.log('-c 1 -a 10 okay');
 
-    runAb('-c 1 -n 100', common.mustCall(function() {
-      console.log('-c 1 -n 100 okay');
+    runAutocannon(100, common.mustCall(function() {
+      // console.log('-c 1 -a 100 okay');
 
-      runAb('-c 1 -n 1000', common.mustCall(function() {
-        console.log('-c 1 -n 1000 okay');
+      runAutocannon(1000, common.mustCall(function() {
+        // console.log('-c 1 -a 1000 okay');
         server.close();
       }));
     }));

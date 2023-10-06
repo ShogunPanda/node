@@ -674,7 +674,7 @@ the build before moving forward. Use the following list as a baseline:
 
 * `process.version` is as expected
 * `process.release` is as expected
-* `process.versions` is as expected (for example, `openssl` or `llhttp` version
+* `process.versions` is as expected (for example, `openssl` or `milo` version
   must be in the expected updated version)
 * npm version (check it matches what we expect)
 * Run the test suite against the built binaries (optional)

@@ -35,8 +35,6 @@ const testCases = [
     response: 'HTTP/1.1 302 Moved Temporarily\r\n\r\n' },
   { path: '/missing', statusMessage: '',
     response: 'HTTP/1.1 200 \r\n\r\n' },
-  { path: '/missing-no-space', statusMessage: '',
-    response: 'HTTP/1.1 200\r\n\r\n' },
 ];
 testCases.findByPath = function(path) {
   const matching = this.filter(function(testCase) {

@@ -12,7 +12,7 @@ const str = 'GET / HTTP/1.1\r\n' +
 const server = http.createServer(common.mustNotCall());
 server.on('clientError', common.mustCall((err, socket) => {
   assert.match(err.message, /^Parse Error/);
-  assert.strictEqual(err.code, 'HPE_INVALID_EOF_STATE');
+  assert.strictEqual(err.code, 'MILO_UNEXPECTED_EOF');
   socket.destroy();
 }, 1));
 server.listen(0, () => {

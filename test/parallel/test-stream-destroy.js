@@ -79,7 +79,7 @@ const http = require('http');
       }));
     });
 
-    req.end('asd');
+    req.end();
   });
 }
 
@@ -115,6 +115,6 @@ const http = require('http');
       }));
     });
 
-    req.end('asd');
+    req.end();
   });
 }

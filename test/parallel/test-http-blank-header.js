@@ -25,15 +25,7 @@ const assert = require('assert');
 const http = require('http');
 const net = require('net');
 
-const server = http.createServer(common.mustCall((req, res) => {
-  assert.strictEqual(req.method, 'GET');
-  assert.strictEqual(req.url, '/blah');
-  assert.deepStrictEqual(req.headers, {
-    host: 'example.org:443',
-    origin: 'http://example.org',
-    cookie: ''
-  });
-}));
+const server = http.createServer(common.mustNotCall());
 
 
 server.listen(0, common.mustCall(() => {

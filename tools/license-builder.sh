@@ -61,8 +61,8 @@ fi
 
 licenseText="$(cat "${rootdir}/deps/uv/LICENSE" "${rootdir}/deps/uv/LICENSE-extra")"
 addlicense "libuv" "deps/uv" "$licenseText"
-licenseText="$(cat deps/llhttp/LICENSE-MIT)"
-addlicense "llhttp" "deps/llhttp" "$licenseText"
+licenseText="$(cat deps/milo/LICENSE-MIT)"
+addlicense "milo" "deps/milo" "$licenseText"
 licenseText="$(cat "${rootdir}/deps/corepack/LICENSE.md")"
 addlicense "corepack" "deps/corepack" "$licenseText"
 licenseText="$(cat "${rootdir}/deps/undici/LICENSE")"

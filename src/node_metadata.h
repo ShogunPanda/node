@@ -43,7 +43,7 @@ namespace node {
   V(modules)                                                                   \
   V(nghttp2)                                                                   \
   V(napi)                                                                      \
-  V(llhttp)                                                                    \
+  V(milo)                                                                      \
   V(uvwasi)                                                                    \
   V(acorn)                                                                     \
   V(simdutf)                                                                   \

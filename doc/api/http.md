@@ -1077,6 +1077,16 @@ const hasContentType = request.hasHeader('content-type');
 
 Limits maximum response headers count. If set to 0, no limit will be applied.
 
+### `request.maxTrailersCount`
+
+<!-- YAML
+added: REPLACEME
+-->
+
+* {number} **Default:** `2000`
+
+Limits maximum response trailers count. If set to 0, no limit will be applied.
+
 ### `request.path`
 
 <!-- YAML
@@ -1749,6 +1759,16 @@ added: v0.7.0
 * {number} **Default:** `2000`
 
 Limits maximum incoming headers count. If set to 0, no limit will be applied.
+
+### `server.maxTrailersCount`
+
+<!-- YAML
+added: REPLACEME
+-->
+
+* {number} **Default:** `2000`
+
+Limits maximum incoming trailers count. If set to 0, no limit will be applied.
 
 ### `server.requestTimeout`
 
@@ -3403,6 +3423,9 @@ Found'`.
 <!-- YAML
 added: v0.1.13
 changes:
+  - version: REPLACEME
+    pr-url: https://github.com/nodejs/node/pull/99999
+    description: The `insecureHTTPParser` option has been removed.
   - version:
     - v20.1.0
     - v18.17.0
@@ -3449,10 +3472,6 @@ changes:
     `readableHighWaterMark` and `writableHighWaterMark`. This affects
     `highWaterMark` property of both `IncomingMessage` and `ServerResponse`.
     **Default:** See [`stream.getDefaultHighWaterMark()`][].
-  * `insecureHTTPParser` {boolean} If set to `true`, it will use a HTTP parser
-    with leniency flags enabled. Using the insecure parser should be avoided.
-    See [`--insecure-http-parser`][] for more information.
-    **Default:** `false`.
   * `IncomingMessage` {http.IncomingMessage} Specifies the `IncomingMessage`
     class to be used. Useful for extending the original `IncomingMessage`.
     **Default:** `IncomingMessage`.
@@ -3742,10 +3761,6 @@ changes:
     request to. **Default:** `'localhost'`.
   * `hostname` {string} Alias for `host`. To support [`url.parse()`][],
     `hostname` will be used if both `host` and `hostname` are specified.
-  * `insecureHTTPParser` {boolean} If set to `true`, it will use a HTTP parser
-    with leniency flags enabled. Using the insecure parser should be avoided.
-    See [`--insecure-http-parser`][] for more information.
-    **Default:** `false`
   * `joinDuplicateHeaders` {boolean} It joins the field line values of
     multiple headers in a request with `, ` instead of discarding
     the duplicates. See [`message.headers`][] for more information.
@@ -4152,7 +4167,6 @@ Set the maximum number of idle HTTP parsers.
 [`'request'`]: #event-request
 [`'response'`]: #event-response
 [`'upgrade'`]: #event-upgrade
-[`--insecure-http-parser`]: cli.md#--insecure-http-parser
 [`--max-http-header-size`]: cli.md#--max-http-header-sizesize
 [`Agent`]: #class-httpagent
 [`Buffer.byteLength()`]: buffer.md#static-method-bufferbytelengthstring-encoding

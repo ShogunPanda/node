@@ -17,15 +17,34 @@ const msg = [
   '',
 ].join('\r\n');
 
+const expectedResponses = [
+  [
+    'HTTP/1.1 200 OK\r\n' +
+    'Content-Type: text/plain\r\n' +
+    'Connection: keep-alive\r\n' +
+    'Keep-Alive: timeout=5\r\n' +
+    'Transfer-Encoding: chunked\r\n' +
+    '\r\n' +
+    '0\r\n' +
+    '\r\n',
+  ].join(''),
+  [
+    'HTTP/1.1 400 Bad Request\r\n' +
+    'Connection: close\r\n' +
+    '\r\n',
+  ].join(''),
+];
+
+
 const server = http.createServer(common.mustCall((req, res) => {
   // Verify that no data is received
-
   req.on('data', common.mustNotCall());
 
-  req.on('end', common.mustNotCall(() => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end();
-  }));
+  // Since Transfer-Encoding is invalid, then the POST has no body
+  // but the request is still valid
+  res.removeHeader('Date');
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end();
 }, 1));
 
 server.listen(0, common.mustSucceed(() => {
@@ -42,7 +61,7 @@ server.listen(0, common.mustSucceed(() => {
   client.on('end', common.mustCall(() => {
     assert.strictEqual(
       response,
-      'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n'
+      expectedResponses[0] + expectedResponses[1]
     );
     server.close();
   }));

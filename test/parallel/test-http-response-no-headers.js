@@ -25,15 +25,9 @@ const assert = require('assert');
 const http = require('http');
 const net = require('net');
 
-const expected = {
-  '0.9': 'I AM THE WALRUS',
-  '1.0': 'I AM THE WALRUS',
-  '1.1': ''
-};
-
 function test(httpVersion, callback) {
   const server = net.createServer(function(conn) {
-    const reply = `HTTP/${httpVersion} 200 OK\r\n\r\n${expected[httpVersion]}`;
+    const reply = `HTTP/${httpVersion} 200 OK\r\n\r\nBODY`;
 
     conn.end(reply);
   });
@@ -53,7 +47,7 @@ function test(httpVersion, callback) {
 
       res.on('aborted', common.mustNotCall());
       res.on('end', common.mustCall(function() {
-        assert.strictEqual(body, expected[httpVersion]);
+        assert.strictEqual(body, 'BODY');
         server.close();
         if (callback) process.nextTick(callback);
       }));
@@ -65,8 +59,4 @@ function test(httpVersion, callback) {
   }));
 }
 
-test('0.9', function() {
-  test('1.0', function() {
-    test('1.1');
-  });
-});
+test('1.1');

@@ -29,7 +29,7 @@ on:
           - icu
           - libuv
           - lint-md-dependencies
-          - llhttp
+          - milo
           - minimatch
           - nghttp2
           - nghttp3
@@ -199,11 +199,11 @@ jobs:
                 cd ../..
                 make lint-md-rollup
               fi
-          - id: llhttp
+          - id: milo
             subsystem: deps
             label: dependencies
             run: |
-              ./tools/dep_updaters/update-llhttp.sh > temp-output
+              ./tools/dep_updaters/update-milo.sh > temp-output
               cat temp-output
               tail -n1 temp-output | grep "NEW_VERSION=" >> "$GITHUB_ENV" || true
               rm temp-output

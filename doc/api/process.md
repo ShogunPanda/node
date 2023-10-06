@@ -3870,7 +3870,7 @@ Will generate an object similar to:
   cjs_module_lexer: '1.2.2',
   cldr: '43.0',
   icu: '73.1',
-  llhttp: '8.1.0',
+  milo: '0.1.0',
   modules: '115',
   napi: '8',
   nghttp2: '1.52.0',
