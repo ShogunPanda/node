@@ -40,10 +40,10 @@ const server = http.createServer(function(request, response) {
 });
 
 let response = '';
+let closed = false;
 
 process.on('exit', function() {
   assert.strictEqual(response, 'beep boop\n');
-  console.log('ok');
 });
 
 server.listen(0, function() {
@@ -52,13 +52,19 @@ server.listen(0, function() {
     assert.deepStrictEqual(res.headers, { date: 'coffee o clock' });
 
     res.setEncoding('ascii');
+
+    res.socket.on('close', () => {
+      closed = true;
+    });
+
     res.on('data', function(chunk) {
+      assert.ok(!closed);
       response += chunk;
       if (response === 'beep boop\n') {
         setTimeout(function() {
           // The socket should be closed immediately, with no keep-alive, because
           // no content-length or transfer-encoding are used:
-          assert.strictEqual(res.socket.closed, true);
+          assert.ok(closed);
           server.close();
         }, common.platformTimeout(15));
       }

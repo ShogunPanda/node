@@ -50,7 +50,8 @@ server.listen(0, common.mustCall(function() {
   }, common.mustCall(() => {
     console.log('connect1');
     assert.strictEqual(client1.isSessionReused(), false);
-    client1.write('GET / HTTP/1.0\r\n' +
+    client1.write('GET / HTTP/1.1\r\n' +
+                  'Host: localhost\r\n' +
                   'Server: 127.0.0.1\r\n' +
                   '\r\n');
   }));
@@ -68,7 +69,8 @@ server.listen(0, common.mustCall(function() {
     const client2 = tls.connect(opts, common.mustCall(() => {
       console.log('connect2');
       assert.strictEqual(client2.isSessionReused(), true);
-      client2.write('GET / HTTP/1.0\r\n' +
+      client2.write('GET / HTTP/1.1\r\n' +
+                    'Host: localhost\r\n' +
                     'Server: 127.0.0.1\r\n' +
                     '\r\n');
     }));

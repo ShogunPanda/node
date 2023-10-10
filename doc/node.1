@@ -288,12 +288,6 @@ Default is
 V8 Inspector integration allows attaching Chrome DevTools and IDEs to Node.js instances for debugging and profiling.
 It uses the Chrome DevTools Protocol.
 .
-.It Fl -insecure-http-parser
-Use an insecure HTTP parser that accepts invalid HTTP headers. This may allow
-interoperability with non-conformant HTTP implementations. It may also allow
-request smuggling and other HTTP attacks that rely on invalid headers being
-accepted. Avoid using this option.
-.
 .It Fl -jitless
 Disable runtime allocation of executable memory. This may be required on
 some platforms for security reasons. It can also reduce attack surface on

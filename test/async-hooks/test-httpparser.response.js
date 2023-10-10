@@ -36,7 +36,7 @@ checkInvocations(httpparser, { init: 1 }, 'when created new Httphttpparser');
 
 parser[kOnHeadersComplete] = common.mustCall(onheadersComplete);
 parser[kOnBody] = common.mustCall(onbody);
-parser.execute(request, 0, request.length);
+parser.execute(request, request.length);
 
 function onheadersComplete() {
   checkInvocations(httpparser, { init: 1, before: 1 },

@@ -20,7 +20,8 @@
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 'use strict';
-require('../common');
+const common = require('../common');
+const assert = require('assert');
 const http = require('http');
 
 // Simple test of Node's HTTP Client choking on a response
@@ -34,11 +35,12 @@ const s = http.createServer(function(req, res) {
 });
 s.listen(0, function() {
 
-  const request = http.request({ port: this.address().port }, (response) => {
-    console.log(`STATUS: ${response.statusCode}`);
+  const request = http.request({ port: this.address().port }, common.mustNotCall());
+
+  request.on('error', common.mustCall((err) => {
+    assert.strictEqual(err.code, 'HPE_UNEXPECTED_CONTENT_LENGTH');
     s.close();
-    response.resume();
-  });
+  }));
 
   request.end();
 });

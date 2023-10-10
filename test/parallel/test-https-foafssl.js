@@ -55,7 +55,7 @@ const server = https.createServer(options, common.mustCall(function(req, res) {
   assert.strictEqual(cert.subjectaltname, webIdUrl);
   assert.strictEqual(cert.exponent, exponent);
   assert.strictEqual(cert.modulus, modulus);
-  res.writeHead(200, { 'content-type': 'text/plain' });
+  res.writeHead(200, { 'content-type': 'text/plain', 'content-length': body.length });
   res.end(body, () => { console.log('stream finished'); });
   console.log('sent response');
 }));
@@ -81,7 +81,7 @@ server.listen(0, function() {
     console.log('server.close() called');
   });
 
-  client.stdin.write('GET /\r\n\r\n');
+  client.stdin.write('GET / HTTP/1.1\r\nHost: localhost\r\n\r\n');
 
   client.on('error', function(error) {
     throw error;

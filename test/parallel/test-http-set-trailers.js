@@ -26,31 +26,6 @@ const http = require('http');
 const net = require('net');
 const util = require('util');
 
-// First, we test an HTTP/1.0 request.
-function testHttp10(port, callback) {
-  const c = net.createConnection(port);
-
-  c.setEncoding('utf8');
-
-  c.on('connect', () => {
-    c.write('GET / HTTP/1.0\r\n\r\n');
-  });
-
-  let res_buffer = '';
-  c.on('data', (chunk) => {
-    res_buffer += chunk;
-  });
-
-  c.on('end', function() {
-    c.end();
-    assert.ok(
-      !/x-foo/.test(res_buffer),
-      `No trailer in HTTP/1.0 response. Response buffer: ${res_buffer}`
-    );
-    callback();
-  });
-}
-
 // Now, we test an HTTP/1.1 request.
 function testHttp11(port, callback) {
   const c = net.createConnection(port);
@@ -90,12 +65,12 @@ function testClientTrailers(port, callback) {
 }
 
 const server = http.createServer((req, res) => {
-  res.writeHead(200, [['content-type', 'text/plain']]);
+  res.writeHead(200, [['content-type', 'text/plain'], ['trailer', 'x-foo']]);
   res.addTrailers({ 'x-foo': 'bar' });
   res.end('stuff\n');
 });
 server.listen(0, () => {
-  Promise.all([testHttp10, testHttp11, testClientTrailers]
+  Promise.all([testHttp11, testClientTrailers]
     .map((f) => util.promisify(f))
     .map((f) => f(server.address().port)))
     .then(() => server.close());

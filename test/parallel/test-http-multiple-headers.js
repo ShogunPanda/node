@@ -1,6 +1,5 @@
 'use strict';
 
-// TODO@PI: Run all tests
 const common = require('../common');
 const assert = require('assert');
 const { createServer, request } = require('http');
@@ -10,6 +9,8 @@ const server = createServer(
   common.mustCall((req, res) => {
     const host = `127.0.0.1:${server.address().port}`;
 
+    server.on('clientError', common.mustNotCall());
+
     assert.deepStrictEqual(req.rawHeaders, [
       'connection', 'close',
       'X-Req-a', 'eee',
@@ -17,6 +18,7 @@ const server = createServer(
       'X-Req-a', 'ggg',
       'X-Req-a', 'hhh',
       'X-Req-b', 'iii; jjj; kkk; lll',
+      'Trailer', 'x-req-x, x-req-y',
       'Host', host,
       'Transfer-Encoding', 'chunked',
     ]);
@@ -25,14 +27,16 @@ const server = createServer(
       'x-req-a': 'eee, fff, ggg, hhh',
       'x-req-b': 'iii; jjj; kkk; lll',
       host,
-      'transfer-encoding': 'chunked'
+      'transfer-encoding': 'chunked',
+      'trailer': 'x-req-x, x-req-y',
     });
     assert.deepStrictEqual(req.headersDistinct, {
       'connection': ['close'],
       'x-req-a': ['eee', 'fff', 'ggg', 'hhh'],
       'x-req-b': ['iii; jjj; kkk; lll'],
       'host': [host],
-      'transfer-encoding': ['chunked']
+      'transfer-encoding': ['chunked'],
+      'trailer': ['x-req-x, x-req-y'],
     });
 
     req.on('end', function() {
@@ -49,6 +53,7 @@ const server = createServer(
         { 'x-req-x': ['xxx', 'yyy'], 'x-req-y': ['zzz; www'] }
       );
 
+      res.setHeader('Trailer', 'x-res-x, x-res-y');
       res.setHeader('X-Res-a', 'AAA');
       res.appendHeader('x-res-a', ['BBB', 'CCC']);
       res.setHeader('X-Res-b', ['DDD', 'EEE']);
@@ -74,11 +79,11 @@ const server = createServer(
       assert.strictEqual(res.getHeader('connection'), 'close');
       assert.deepStrictEqual(
         res.getHeaderNames(),
-        ['x-res-a', 'x-res-b', 'connection', 'x-res-c', 'x-res-d']
+        ['trailer', 'x-res-a', 'x-res-b', 'connection', 'x-res-c', 'x-res-d']
       );
       assert.deepStrictEqual(
         res.getRawHeaderNames(),
-        ['X-Res-a', 'X-Res-b', 'Connection', 'x-res-c', 'x-res-d']
+        ['Trailer', 'X-Res-a', 'X-Res-b', 'Connection', 'x-res-c', 'x-res-d']
       );
 
       const headers = { __proto__: null };
@@ -86,6 +91,7 @@ const server = createServer(
         'x-res-a': [ 'AAA', 'BBB', 'CCC' ],
         'x-res-b': [ 'DDD', 'EEE', 'FFF', 'GGG' ],
         'connection': 'close',
+        'trailer': 'x-res-x, x-res-y',
         'x-res-c': [ 'HHH', 'III' ],
         'x-res-d': [ 'JJJ', 'KKK', 'LLL' ]
       });
@@ -106,11 +112,13 @@ server.listen(0, common.mustCall(() => {
       'connection': 'close',
       'x-req-a': 'aaa',
       'X-Req-a': 'bbb',
-      'X-Req-b': ['ccc', 'ddd']
+      'X-Req-b': ['ccc', 'ddd'],
+      'Trailer': 'x-req-x, x-req-y'
     },
     uniqueHeaders: ['x-req-b', 'x-req-y']
   }, common.mustCall((res) => {
     assert.deepStrictEqual(res.rawHeaders, [
+      'Trailer', 'x-res-x, x-res-y',
       'X-Res-a', 'AAA',
       'X-Res-a', 'BBB',
       'X-Res-a', 'CCC',
@@ -127,7 +135,8 @@ server.listen(0, common.mustCall(() => {
       'connection': 'close',
       'x-res-c': 'HHH, III',
       'x-res-d': 'JJJ; KKK; LLL',
-      'transfer-encoding': 'chunked'
+      'transfer-encoding': 'chunked',
+      'trailer': 'x-res-x, x-res-y',
     });
     assert.deepStrictEqual(res.headersDistinct, {
       'x-res-a': [ 'AAA', 'BBB', 'CCC' ],
@@ -135,7 +144,8 @@ server.listen(0, common.mustCall(() => {
       'connection': [ 'close' ],
       'x-res-c': [ 'HHH', 'III' ],
       'x-res-d': [ 'JJJ; KKK; LLL' ],
-      'transfer-encoding': [ 'chunked' ]
+      'transfer-encoding': [ 'chunked' ],
+      'trailer': ['x-res-x, x-res-y'],
     });
 
     res.on('end', function() {
@@ -169,5 +179,6 @@ server.listen(0, common.mustCall(() => {
 
   req.write('BODY');
 
+  req.on('error', common.mustNotCall());
   req.end();
 }));

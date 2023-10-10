@@ -68,7 +68,7 @@
 
 # http
 
-/deps/llhttp/* @nodejs/http @nodejs/net
+/deps/milo/* @nodejs/http @nodejs/net
 /doc/api/http.md @nodejs/http @nodejs/net
 /lib/_http_* @nodejs/http @nodejs/net
 /lib/http.js @nodejs/http @nodejs/net

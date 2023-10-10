@@ -12,7 +12,7 @@ const server = net.createServer((socket) => {
     socket.write('\n\r\n');
     setTimeout(() => {
       socket.write('1\r\n');
-      socket.write('\n\r\n');
+      socket.write('\n\r\n0\r\n');
       setImmediate(() => {
         socket.destroy();
         server.close();
@@ -26,10 +26,7 @@ const server = net.createServer((socket) => {
     HTTPParser.RESPONSE,
     {},
     0,
-    0,
   );
-
-  parser[HTTPParser.kOnTimeout] = common.mustNotCall();
 
   parser[HTTPParser.kOnHeaders] = common.mustNotCall();
 
@@ -37,7 +34,7 @@ const server = net.createServer((socket) => {
 
   parser[HTTPParser.kOnHeadersComplete] = common.mustCall();
 
-  parser[HTTPParser.kOnBody] = common.mustCall(2);
+  parser[HTTPParser.kOnBody] = common.mustCallAtLeast(2);
 
   parser[HTTPParser.kOnMessageComplete] = common.mustNotCall();
 

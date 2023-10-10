@@ -1,5 +1,5 @@
 #include "inspector_socket.h"
-#include "llhttp.h"
+#include "milo.h"
 
 #include "base64-inl.h"
 #include "util-inl.h"
@@ -485,12 +485,14 @@ class HttpHandler : public ProtocolHandler {
   explicit HttpHandler(InspectorSocket* inspector, TcpHolder::Pointer tcp)
                        : ProtocolHandler(inspector, std::move(tcp)),
                          parsing_value_(false) {
-    llhttp_init(&parser_, HTTP_REQUEST, &parser_settings);
-    llhttp_settings_init(&parser_settings);
-    parser_settings.on_header_field = OnHeaderField;
-    parser_settings.on_header_value = OnHeaderValue;
-    parser_settings.on_message_complete = OnMessageComplete;
-    parser_settings.on_url = OnPath;
+    parser_ = milo::milo_create();
+    parser_->owner = this;
+    parser_->mode = milo::REQUEST;
+    parser_->callbacks.on_header_name = OnHeaderName;
+    parser_->callbacks.on_header_value = OnHeaderValue;
+    parser_->callbacks.on_url = OnPath;
+    parser_->callbacks.on_upgrade = OnMessageComplete;
+    parser_->callbacks.on_message_complete = OnMessageComplete;
   }
 
   void AcceptUpgrade(const std::string& accept_key) override {
@@ -516,7 +518,8 @@ class HttpHandler : public ProtocolHandler {
 
   void CancelHandshake() override {
     const char HANDSHAKE_FAILED_RESPONSE[] =
-        "HTTP/1.0 400 Bad Request\r\n"
+        "HTTP/1.1 400 Bad Request\r\n"
+        "Connection: close\r\n"
         "Content-Type: text/html; charset=UTF-8\r\n\r\n"
         "WebSockets request was expected\r\n";
     WriteRaw(std::vector<char>(HANDSHAKE_FAILED_RESPONSE,
@@ -530,15 +533,11 @@ class HttpHandler : public ProtocolHandler {
   }
 
   void OnData(std::vector<char>* data) override {
-    llhttp_errno_t err;
-    err = llhttp_execute(&parser_, data->data(), data->size());
-
-    if (err == HPE_PAUSED_UPGRADE) {
-      err = HPE_OK;
-      llhttp_resume_after_upgrade(&parser_);
-    }
+    milo::milo_parse(parser_,
+                     reinterpret_cast<const unsigned char*>(data->data()),
+                     data->size());
     data->clear();
-    if (err != HPE_OK) {
+    if (parser_->error_code != milo::ERROR_NONE) {
       CancelHandshake();
     }
     // Event handling may delete *this
@@ -565,6 +564,7 @@ class HttpHandler : public ProtocolHandler {
 
  protected:
   void Shutdown() override {
+    milo::milo_destroy(parser_);
     delete this;
   }
 
@@ -575,39 +575,45 @@ class HttpHandler : public ProtocolHandler {
     handler->inspector()->SwitchProtocol(nullptr);
   }
 
-  static int OnHeaderValue(llhttp_t* parser, const char* at, size_t length) {
+  static HttpHandler* From(const milo::Parser* parser) {
+    return reinterpret_cast<HttpHandler*>(parser->owner);
+  }
+
+  static intptr_t OnHeaderValue(const milo::Parser* parser,
+                                const unsigned char* at, size_t length) {
     HttpHandler* handler = From(parser);
     handler->parsing_value_ = true;
-    handler->headers_[handler->current_header_].append(at, length);
+    handler->headers_[handler->current_header_].append(
+      reinterpret_cast<const char *>(at), length);
     return 0;
   }
 
-  static int OnHeaderField(llhttp_t* parser, const char* at, size_t length) {
+  static intptr_t OnHeaderName(const milo::Parser* parser,
+                                const unsigned char* at, size_t length) {
     HttpHandler* handler = From(parser);
     if (handler->parsing_value_) {
       handler->parsing_value_ = false;
       handler->current_header_.clear();
     }
-    handler->current_header_.append(at, length);
+    handler->current_header_.append(reinterpret_cast<const char *>(at), length);
     return 0;
   }
 
-  static int OnPath(llhttp_t* parser, const char* at, size_t length) {
+  static intptr_t OnPath(const milo::Parser* parser,
+                                const unsigned char* at, size_t length) {
     HttpHandler* handler = From(parser);
-    handler->path_.append(at, length);
+    handler->path_.append(reinterpret_cast<const char *>(at), length);
     return 0;
   }
 
-  static HttpHandler* From(llhttp_t* parser) {
-    return node::ContainerOf(&HttpHandler::parser_, parser);
-  }
-
-  static int OnMessageComplete(llhttp_t* parser) {
+  static intptr_t OnMessageComplete(const milo::Parser* parser,
+                                const unsigned char* at, size_t length) {
     // Event needs to be fired after the parser is done.
     HttpHandler* handler = From(parser);
+    bool is_upgrade = parser->is_connect || parser->has_upgrade;
     handler->events_.emplace_back(handler->path_,
-                                  parser->upgrade,
-                                  parser->method == HTTP_GET,
+                                  is_upgrade,
+                                  parser->method == milo::METHOD_GET,
                                   handler->HeaderValue("Sec-WebSocket-Key"),
                                   handler->HeaderValue("Host"));
     handler->path_ = "";
@@ -639,8 +645,7 @@ class HttpHandler : public ProtocolHandler {
   }
 
   bool parsing_value_;
-  llhttp_t parser_;
-  llhttp_settings_t parser_settings;
+  milo::Parser* parser_;
   std::vector<HttpEvent> events_;
   std::string current_header_;
   std::map<std::string, std::string> headers_;

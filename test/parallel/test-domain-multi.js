@@ -47,8 +47,9 @@ const server = http.createServer((req, res) => {
   b.on('error', common.mustCall((er) => {
     if (res) {
       // Introduce an error on the client by writing unexpected data.
-      // The client is now expecting a chunk header so any letter will have the parser throw an error.
-      res.socket.write('H');
+      // The client is now expecting a chunk header so let's send it
+      // an invalid number to have the parser throw an error.
+      res.socket.write('H\r\n');
     }
     // res.writeHead(500), res.destroy, etc.
     server.close();

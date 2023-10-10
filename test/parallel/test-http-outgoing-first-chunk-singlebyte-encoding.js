@@ -10,6 +10,8 @@ const net = require('net');
 for (const enc of ['utf8', 'utf16le', 'latin1', 'UTF-8']) {
   const server = http.createServer(common.mustCall((req, res) => {
     res.setHeader('content-type', `text/plain; charset=${enc}`);
+    res.setHeader('content-length', '10');
+    res.setHeader('connection', 'close');
     res.write('helloworld', enc);
     res.end();
   })).listen(0);
@@ -17,7 +19,7 @@ for (const enc of ['utf8', 'utf16le', 'latin1', 'UTF-8']) {
   server.on('listening', common.mustCall(() => {
     const buffers = [];
     const socket = net.connect(server.address().port);
-    socket.write('GET / HTTP/1.0\r\n\r\n');
+    socket.write('GET / HTTP/1.1\r\nHost: localhost\r\n\r\n');
     socket.on('data', (data) => buffers.push(data));
     socket.on('end', common.mustCall(() => {
       const received = Buffer.concat(buffers);

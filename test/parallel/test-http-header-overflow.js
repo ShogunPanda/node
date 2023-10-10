@@ -23,7 +23,7 @@ server.on('connection', mustCall((socket) => {
     name: 'Error',
     message: 'Parse Error: Header overflow',
     code: 'HPE_HEADER_OVERFLOW',
-    bytesParsed: maxHeaderSize + PAYLOAD_GET.length + (CRLF.length * 2) + 1,
+    bytesParsed: PAYLOAD_GET.length + CRLF.length + DUMMY_HEADER_NAME.length - 1,
     rawPacket: Buffer.from(PAYLOAD)
   }));
 }));

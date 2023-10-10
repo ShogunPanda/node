@@ -156,7 +156,8 @@ class SocketWrapper {
   void TestHttpRequest(const std::string& path,
                        const std::string& expected_reply) {
     std::ostringstream expectations;
-    expectations << "HTTP/1.0 200 OK\r\n"
+    expectations << "HTTP/1.1 200 OK\r\n"
+                    "Connection: close\r\n"
                     "Content-Type: application/json; charset=UTF-8\r\n"
                     "Cache-Control: no-cache\r\n"
                     "Content-Length: ";
@@ -415,7 +416,7 @@ TEST_F(InspectorSocketServerTest, InspectorSessions) {
   SocketWrapper bogus_target_socket(&loop);
   bogus_target_socket.Connect(HOST, server.port());
   bogus_target_socket.Write(WsHandshakeRequest("bogus_target"));
-  bogus_target_socket.Expect("HTTP/1.0 400 Bad Request");
+  bogus_target_socket.Expect("HTTP/1.1 400 Bad Request");
   bogus_target_socket.ExpectEOF();
   EXPECT_EQ(1, server.connected);
   EXPECT_EQ(1, server.disconnected);
@@ -480,7 +481,7 @@ TEST_F(InspectorSocketServerTest, ServerWithoutTargets) {
   SocketWrapper socket(&loop);
   socket.Connect(HOST, server.port());
   socket.Write(WsHandshakeRequest("any target id"));
-  socket.Expect("HTTP/1.0 400 Bad Request");
+  socket.Expect("HTTP/1.1 400 Bad Request");
   socket.ExpectEOF();
   server->Stop();
   server->TerminateConnections();

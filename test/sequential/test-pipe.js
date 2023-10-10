@@ -95,7 +95,7 @@ function startClient() {
 
   const req = http.request({
     port: common.PORT,
-    method: 'GET',
+    method: 'POST',
     path: '/',
     headers: { 'content-length': buffer.length }
   }, common.mustCall((res) => {

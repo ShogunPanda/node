@@ -30,7 +30,7 @@ const http = require('http');
 ['DELETE', 'PATCH', 'PURGE'].forEach(function(method, index) {
   const server = http.createServer(common.mustCall(function(req, res) {
     assert.strictEqual(req.method, method);
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.writeHead(200, { 'Content-Type': 'text/plain', 'Connection': 'close' });
     res.write('hello ');
     res.write('world\n');
     res.end();
@@ -44,17 +44,16 @@ const http = require('http');
     c.setEncoding('utf8');
 
     c.on('connect', function() {
-      c.write(`${method} / HTTP/1.0\r\n\r\n`);
+      c.write(`${method} / HTTP/1.1\r\nHost: localhost\r\n\r\n`);
     });
 
     c.on('data', function(chunk) {
-      console.log(chunk);
       server_response += chunk;
     });
 
     c.on('end', common.mustCall(function() {
       const m = server_response.split('\r\n\r\n');
-      assert.strictEqual(m[1], 'hello world\n');
+      assert.strictEqual(m[1], '6\r\nhello \r\n6\r\nworld\n\r\n0');
       c.end();
     }));
 
