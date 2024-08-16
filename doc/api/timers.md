@@ -512,6 +512,10 @@ const interval = 100;
 })();
 ```
 
+### `timersPromises.sleep([delay[, value[, options]]])`
+
+An alias for [`timersPromises.setTimeout()`][].
+
 ### `timersPromises.scheduler.wait(delay[, options])`
 
 <!-- YAML
