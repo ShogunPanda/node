@@ -25,6 +25,7 @@
     'node_shared_openssl%': 'false',
     'node_shared_sqlite%': 'false',
     'node_shared_ffi%': 'false',
+    'node_shared_ffi%': 'false',
     'node_shared_temporal_capi%': 'false',
     'node_shared_uvwasi%': 'false',
     'node_shared_zlib%': 'false',
@@ -460,15 +461,8 @@
       'src/node_webstorage.h',
     ],
     'node_ffi_sources': [
-      'src/ffi/dynamic_library.cc',
       'src/ffi/node_ffi.cc',
       'src/ffi/node_ffi.h',
-      'src/ffi/pointer_object.cc',
-      'src/ffi/types.cc',
-      'src/ffi/unsafe_callback.cc',
-      'src/ffi/unsafe_fn_pointer.cc',
-      'src/ffi/unsafe_pointer.cc',
-      'src/ffi/unsafe_pointer_view.cc',
     ],
     'node_mksnapshot_exec': '<(PRODUCT_DIR)/<(EXECUTABLE_PREFIX)node_mksnapshot<(EXECUTABLE_SUFFIX)',
     'node_js2c_exec': '<(PRODUCT_DIR)/<(EXECUTABLE_PREFIX)node_js2c<(EXECUTABLE_SUFFIX)',
@@ -999,7 +993,7 @@
           ],
           'include_dirs': [
             'deps/libffi/include',
-            '<(PRODUCT_DIR)/obj.target/libffi/geni',
+            '<(PRODUCT_DIR)/obj/deps/libffi/libffi.gen',
           ],
         }],
         [ 'node_shared=="true" and node_module_version!="" and OS!="win"', {
