@@ -405,6 +405,7 @@
   V(dns_ns_record_template, v8::DictionaryTemplate)                            \
   V(fd_constructor_template, v8::ObjectTemplate)                               \
   V(fdclose_constructor_template, v8::ObjectTemplate)                          \
+  V(ffi_dynamic_library_constructor_template, v8::FunctionTemplate)            \
   V(filehandlereadwrap_template, v8::ObjectTemplate)                           \
   V(free_list_statistics_template, v8::DictionaryTemplate)                     \
   V(fsreqpromise_constructor_template, v8::ObjectTemplate)                     \
