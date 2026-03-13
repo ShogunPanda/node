@@ -55,7 +55,7 @@ struct FFIFunction {
   ffi_type* return_type;
 };
 
-// Verify the environment is the same when invoking. See if you can support thread safety
+// TODO: Verify the environment is the same when invoking. See if you can support thread safety
 struct FFICallback {
   DynamicLibrary* owner;
   Environment* env;
