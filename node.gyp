@@ -25,7 +25,6 @@
     'node_shared_openssl%': 'false',
     'node_shared_sqlite%': 'false',
     'node_shared_ffi%': 'false',
-    'node_shared_ffi%': 'false',
     'node_shared_temporal_capi%': 'false',
     'node_shared_uvwasi%': 'false',
     'node_shared_zlib%': 'false',
@@ -463,6 +462,7 @@
     'node_ffi_sources': [
       'src/node_ffi.cc',
       'src/node_ffi.h',
+      'src/ffi/data.cc',
       'src/ffi/types.cc'
     ],
     'node_mksnapshot_exec': '<(PRODUCT_DIR)/<(EXECUTABLE_PREFIX)node_mksnapshot<(EXECUTABLE_SUFFIX)',
@@ -992,9 +992,13 @@
           'sources': [
             '<@(node_ffi_sources)',
           ],
-          'include_dirs': [
-            'deps/libffi/include',
-            '<(PRODUCT_DIR)/obj/deps/libffi/libffi.gen',
+          'conditions': [
+            [ 'node_shared_ffi=="false"', {
+              'include_dirs': [
+                'deps/libffi/include',
+                '<(PRODUCT_DIR)/obj/deps/libffi/libffi.gen',
+              ],
+            }],
           ],
         }],
         [ 'node_shared=="true" and node_module_version!="" and OS!="win"', {
@@ -1056,9 +1060,13 @@
           'sources': [
             '<@(node_ffi_sources)',
           ],
-          'include_dirs': [
-            'deps/libffi/include',
-            '<(PRODUCT_DIR)/obj.target/libffi/geni',
+          'conditions': [
+            [ 'node_shared_ffi=="false"', {
+              'include_dirs': [
+                'deps/libffi/include',
+                '<(PRODUCT_DIR)/obj/deps/libffi/libffi.gen',
+              ],
+            }],
           ],
         }],
         [ 'node_use_quic=="true"', {

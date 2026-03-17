@@ -1,28 +1,215 @@
 #if HAVE_FFI
 
-#include "ffi.h"
 #include "base_object-inl.h"
+#include "ffi.h"
+#include "node_ffi.h"
 #include "v8.h"
 
+#include <cmath>
+
+using v8::Array;
 using v8::ArrayBuffer;
 using v8::ArrayBufferView;
 using v8::BackingStore;
 using v8::BigInt;
 using v8::Context;
-using v8::Function;
 using v8::FunctionCallbackInfo;
 using v8::Integer;
 using v8::Isolate;
 using v8::Local;
-using v8::MaybeLocal;
-using v8::NewStringType;
 using v8::Number;
+using v8::Object;
 using v8::String;
 using v8::Value;
 
 namespace node {
 
 namespace ffi {
+
+bool HasProperty(Local<Context> context,
+                 Local<Object> object,
+                 Local<String> key,
+                 bool* out) {
+  v8::Maybe<bool> has = object->Has(context, key);
+  if (has.IsNothing()) {
+    return false;
+  }
+
+  *out = has.FromJust();
+  return true;
+}
+
+bool GetStrictSignedInteger(Local<Value> value,
+                            int64_t min,
+                            int64_t max,
+                            int64_t* out) {
+  if (!value->IsNumber()) {
+    return false;
+  }
+
+  double number = value.As<Number>()->Value();
+  if (!std::isfinite(number) || std::floor(number) != number || number < min ||
+      number > max) {
+    return false;
+  }
+
+  *out = static_cast<int64_t>(number);
+  return true;
+}
+
+bool GetStrictUnsignedInteger(Local<Value> value, uint64_t max, uint64_t* out) {
+  if (!value->IsNumber()) {
+    return false;
+  }
+
+  double number = value.As<Number>()->Value();
+  if (!std::isfinite(number) || std::floor(number) != number || number < 0 ||
+      number > static_cast<double>(max)) {
+    return false;
+  }
+
+  *out = static_cast<uint64_t>(number);
+  return true;
+}
+
+bool ParseFunctionSignature(Environment* env,
+                            const std::string& name,
+                            Local<Object> signature,
+                            ffi_type** return_type,
+                            std::vector<ffi_type*>* args) {
+  Local<Context> context = env->context();
+  Local<String> returns_key =
+      String::NewFromUtf8Literal(env->isolate(), "returns");
+  Local<String> return_key =
+      String::NewFromUtf8Literal(env->isolate(), "return");
+  Local<String> result_key =
+      String::NewFromUtf8Literal(env->isolate(), "result");
+  Local<String> parameters_key =
+      String::NewFromUtf8Literal(env->isolate(), "parameters");
+  Local<String> arguments_key =
+      String::NewFromUtf8Literal(env->isolate(), "arguments");
+
+  bool has_returns;
+  bool has_return;
+  bool has_result;
+  bool has_parameters;
+  bool has_arguments;
+
+  if (!HasProperty(context, signature, returns_key, &has_returns) ||
+      !HasProperty(context, signature, return_key, &has_return) ||
+      !HasProperty(context, signature, result_key, &has_result) ||
+      !HasProperty(context, signature, parameters_key, &has_parameters) ||
+      !HasProperty(context, signature, arguments_key, &has_arguments)) {
+    return false;
+  }
+
+  if (has_returns + has_return + has_result > 1) {
+    std::string msg = "Function signature of " + name +
+                      " must have either 'returns', 'return' or 'result' "
+                      "property";
+    env->ThrowTypeError(msg.c_str());
+    return false;
+  }
+
+  if (has_arguments && has_parameters) {
+    std::string msg = "Function signature of " + name +
+                      " must have either 'parameters' or 'arguments' "
+                      "property";
+    env->ThrowTypeError(msg.c_str());
+    return false;
+  }
+
+  *return_type = &ffi_type_void;
+  args->clear();
+
+  Isolate* isolate = env->isolate();
+  if (has_returns || has_return || has_result) {
+    Local<String> return_type_key;
+    if (has_returns) {
+      return_type_key = returns_key;
+    } else if (has_return) {
+      return_type_key = return_key;
+    } else {
+      return_type_key = result_key;
+    }
+
+    Local<Value> return_type_val;
+    if (!signature->Get(context, return_type_key).ToLocal(&return_type_val)) {
+      return false;
+    }
+
+    if (!return_type_val->IsString()) {
+      std::string msg =
+          "Return value type of function " + name + " must be a string";
+      env->ThrowTypeError(msg.c_str());
+      return false;
+    }
+
+    node::Utf8Value return_type_str(isolate, return_type_val);
+    if (!ToFFIType(env, *return_type_str, return_type)) {
+      return false;
+    }
+  }
+
+  if (has_arguments || has_parameters) {
+    Local<Value> arguments_val;
+    if (!signature->Get(context, has_arguments ? arguments_key : parameters_key)
+             .ToLocal(&arguments_val)) {
+      return false;
+    }
+
+    if (!arguments_val->IsArray()) {
+      std::string msg =
+          "Arguments list of function " + name + " must be an array";
+      env->ThrowTypeError(msg.c_str());
+      return false;
+    }
+
+    Local<Array> arguments_array = arguments_val.As<Array>();
+    unsigned int argn = arguments_array->Length();
+    args->reserve(argn);
+    for (unsigned int i = 0; i < argn; i++) {
+      Local<Value> arg;
+
+      if (!arguments_array->Get(context, i).ToLocal(&arg)) {
+        return false;
+      }
+
+      if (!arg->IsString()) {
+        std::string msg = "Argument " + std::to_string(i) + " of function " +
+                          name + " must be a string";
+        env->ThrowTypeError(msg.c_str());
+        return false;
+      }
+
+      node::Utf8Value arg_str(isolate, arg);
+      ffi_type* arg_type;
+      if (!ToFFIType(env, *arg_str, &arg_type)) {
+        return false;
+      }
+
+      args->push_back(arg_type);
+    }
+  }
+
+  return true;
+}
+
+bool SignaturesMatch(const FFIFunction& fn,
+                     ffi_type* return_type,
+                     const std::vector<ffi_type*>& args) {
+  if (fn.return_type != return_type || fn.args.size() != args.size()) {
+    return false;
+  }
+
+  for (size_t i = 0; i < args.size(); i++) {
+    if (fn.args[i] != args[i]) {
+      return false;
+    }
+  }
+
+  return true;
+}
 
 bool ToFFIType(Environment* env, const std::string& type_str, ffi_type** ret) {
   if (ret == nullptr) {
@@ -34,7 +221,8 @@ bool ToFFIType(Environment* env, const std::string& type_str, ffi_type** ret) {
     *ret = &ffi_type_void;
   } else if (type_str == "i8" || type_str == "int8") {
     *ret = &ffi_type_sint8;
-  } else if (type_str == "u8" || type_str == "uint8" || type_str == "bool" || type_str == "char") {
+  } else if (type_str == "u8" || type_str == "uint8" || type_str == "bool" ||
+             type_str == "char") {
     *ret = &ffi_type_uint8;
   } else if (type_str == "i16" || type_str == "int16") {
     *ret = &ffi_type_sint16;
@@ -52,14 +240,10 @@ bool ToFFIType(Environment* env, const std::string& type_str, ffi_type** ret) {
     *ret = &ffi_type_float;
   } else if (type_str == "f64" || type_str == "double") {
     *ret = &ffi_type_double;
-  } else if (type_str == "buffer" ||
-             type_str == "arraybuffer" ||
-             type_str == "string" ||
-             type_str == "str" ||
-             type_str == "pointer" ||
-             type_str == "ptr"||
-             type_str == "function"
-  ) {
+  } else if (type_str == "buffer" || type_str == "arraybuffer" ||
+             type_str == "string" || type_str == "str" ||
+             type_str == "pointer" || type_str == "ptr" ||
+             type_str == "function") {
     *ret = &ffi_type_pointer;
   } else {
     std::string msg = std::string("Unsupported FFI type: ") + type_str;
@@ -71,53 +255,62 @@ bool ToFFIType(Environment* env, const std::string& type_str, ffi_type** ret) {
 }
 
 uint8_t ToFFIArgument(Environment* env,
-                unsigned int index,
-                ffi_type* type,
-                v8::Local<v8::Value> arg,
-                void* ret) {
-  v8::Local<v8::Context> context = env->context();
+                      unsigned int index,
+                      ffi_type* type,
+                      Local<Value> arg,
+                      void* ret) {
+  Local<Context> context = env->context();
 
-  if(type == &ffi_type_void) {
+  if (type == &ffi_type_void) {
     return 1;
   } else if (type == &ffi_type_sint8) {
-    if (!arg->IsInt32()) {
+    int64_t value;
+    if (!GetValidatedSignedInt(env, arg, INT8_MIN, INT8_MAX, "int8", &value)) {
+      if (env->isolate()->IsExecutionTerminating()) return 0;
       env->ThrowTypeError(
           ("Argument " + std::to_string(index) + " must be an int8").c_str());
       return 0;
     }
 
-    *static_cast<int8_t*>(ret) = static_cast<int8_t>(arg->Int32Value(context).FromJust());    
+    *static_cast<int8_t*>(ret) = static_cast<int8_t>(value);
   } else if (type == &ffi_type_uint8) {
-    if (!arg->IsUint32()) {
+    uint64_t value;
+    if (!GetValidatedUnsignedInt(env, arg, UINT8_MAX, "uint8", &value)) {
+      if (env->isolate()->IsExecutionTerminating()) return 0;
       env->ThrowTypeError(
           ("Argument " + std::to_string(index) + " must be a uint8").c_str());
       return 0;
     }
-    
-    *static_cast<uint8_t*>(ret) = static_cast<uint8_t>(arg->Uint32Value(context).FromJust());
+
+    *static_cast<uint8_t*>(ret) = static_cast<uint8_t>(value);
   } else if (type == &ffi_type_sint16) {
-    if (!arg->IsInt32()) {
+    int64_t value;
+    if (!GetValidatedSignedInt(
+            env, arg, INT16_MIN, INT16_MAX, "int16", &value)) {
+      if (env->isolate()->IsExecutionTerminating()) return 0;
       env->ThrowTypeError(
           ("Argument " + std::to_string(index) + " must be an int16").c_str());
       return 0;
     }
-    
-    *static_cast<int16_t*>(ret) = static_cast<int16_t>(arg->Int32Value(context).FromJust());
+
+    *static_cast<int16_t*>(ret) = static_cast<int16_t>(value);
   } else if (type == &ffi_type_uint16) {
-    if (!arg->IsUint32()) {
+    uint64_t value;
+    if (!GetValidatedUnsignedInt(env, arg, UINT16_MAX, "uint16", &value)) {
+      if (env->isolate()->IsExecutionTerminating()) return 0;
       env->ThrowTypeError(
           ("Argument " + std::to_string(index) + " must be a uint16").c_str());
       return 0;
     }
-    
-    *static_cast<uint16_t*>(ret) = static_cast<uint16_t>(arg->Uint32Value(context).FromJust());
+
+    *static_cast<uint16_t*>(ret) = static_cast<uint16_t>(value);
   } else if (type == &ffi_type_sint32) {
     if (!arg->IsInt32()) {
       env->ThrowTypeError(
           ("Argument " + std::to_string(index) + " must be an int32").c_str());
       return 0;
     }
-    
+
     *static_cast<int32_t*>(ret) = arg->Int32Value(context).FromJust();
   } else if (type == &ffi_type_uint32) {
     if (!arg->IsUint32()) {
@@ -125,119 +318,100 @@ uint8_t ToFFIArgument(Environment* env,
           ("Argument " + std::to_string(index) + " must be a uint32").c_str());
       return 0;
     }
-    
+
     *static_cast<uint32_t*>(ret) = arg->Uint32Value(context).FromJust();
   } else if (type == &ffi_type_sint64) {
-    if (!arg->IsBigInt() && !arg->IsNumber()) {
+    if (!arg->IsBigInt()) {
       env->ThrowTypeError(
           ("Argument " + std::to_string(index) + " must be an int64").c_str());
       return 0;
     }
 
-    *static_cast<int64_t*>(ret) = arg->IsBigInt()
-      ? arg.As<BigInt>()->Int64Value(nullptr)
-      : static_cast<int64_t>(arg.As<Number>()->Value());
+    *static_cast<int64_t*>(ret) = arg.As<BigInt>()->Int64Value(nullptr);
   } else if (type == &ffi_type_uint64) {
-    if (!arg->IsBigInt() && !arg->IsNumber()) {
+    if (!arg->IsBigInt()) {
       env->ThrowTypeError(
           ("Argument " + std::to_string(index) + " must be a uint64").c_str());
       return 0;
     }
-    
-    *static_cast<uint64_t*>(ret) = arg->IsBigInt()
-      ? arg.As<BigInt>()->Uint64Value(nullptr)
-      : static_cast<uint64_t>(arg.As<Number>()->Value());
+
+    *static_cast<uint64_t*>(ret) = arg.As<BigInt>()->Uint64Value(nullptr);
   } else if (type == &ffi_type_float) {
     if (!arg->IsNumber()) {
       env->ThrowTypeError(
           ("Argument " + std::to_string(index) + " must be a float").c_str());
       return 0;
     }
-    
-    *static_cast<float*>(ret) = static_cast<float>(arg->NumberValue(context).FromJust());
+
+    *static_cast<float*>(ret) =
+        static_cast<float>(arg->NumberValue(context).FromJust());
   } else if (type == &ffi_type_double) {
     if (!arg->IsNumber()) {
       env->ThrowTypeError(
           ("Argument " + std::to_string(index) + " must be a double").c_str());
       return 0;
     }
-    
+
     *static_cast<double*>(ret) = arg->NumberValue(context).FromJust();
   } else if (type == &ffi_type_pointer) {
-    if(arg->IsNull() || arg->IsUndefined()) {
+    if (arg->IsNull() || arg->IsUndefined()) {
       *static_cast<uint64_t*>(ret) = reinterpret_cast<uint64_t>(nullptr);
-    } else if (arg->IsString()) {    
-      // This will handled in Invoke so that we can free the copied string after the call
+    } else if (arg->IsString()) {
+      // This will handled in Invoke so that we can free the copied string after
+      // the call
       return 2;
     } else if (arg->IsArrayBufferView()) {
       Local<ArrayBufferView> view = arg.As<ArrayBufferView>();
       std::shared_ptr<BackingStore> store = view->Buffer()->GetBackingStore();
-      
+
       if (!store) {
-        env->ThrowTypeError(("Invalid ArrayBufferView backing store for argument " + std::to_string(index)).c_str());
+        env->ThrowTypeError(
+            ("Invalid ArrayBufferView backing store for argument " +
+             std::to_string(index))
+                .c_str());
         return 0;
       }
 
       void* data = store->Data();
       size_t offset = view->ByteOffset();
 
-      *static_cast<uint64_t*>(ret) = reinterpret_cast<uint64_t>(static_cast<char*>(data) + offset);
+      *static_cast<uint64_t*>(ret) =
+          reinterpret_cast<uint64_t>(static_cast<char*>(data) + offset);
     } else if (arg->IsArrayBuffer()) {
       Local<ArrayBuffer> buffer = arg.As<ArrayBuffer>();
       std::shared_ptr<BackingStore> store = buffer->GetBackingStore();
-      
+
       if (!store) {
-        env->ThrowTypeError(("Invalid ArrayBuffer backing store for argument " + std::to_string(index)).c_str());
+        env->ThrowTypeError(("Invalid ArrayBuffer backing store for argument " +
+                             std::to_string(index))
+                                .c_str());
         return 0;
       }
 
       *static_cast<uint64_t*>(ret) = reinterpret_cast<uint64_t>(store->Data());
-    } else if (arg->IsBigInt() || arg->IsNumber()) {
-      *static_cast<uint64_t*>(ret) = arg->IsBigInt()
-        ? arg.As<BigInt>()->Uint64Value(nullptr)
-        : static_cast<uint64_t>(arg.As<Number>()->Value());
+    } else if (arg->IsBigInt()) {
+      bool lossless;
+      *static_cast<uint64_t*>(ret) = arg.As<BigInt>()->Uint64Value(&lossless);
+      if (!lossless) {
+        env->ThrowTypeError(("Argument " + std::to_string(index) +
+                             " must be a non-negative pointer bigint")
+                                .c_str());
+        return 0;
+      }
     } else {
       env->ThrowTypeError(
-          ("Argument " + std::to_string(index) + " must be a buffer, an ArrayBuffer, a string, a number or a bigint").c_str());
+          ("Argument " + std::to_string(index) +
+           " must be a buffer, an ArrayBuffer, a string, or a bigint")
+              .c_str());
       return 0;
     }
   } else {
     env->ThrowTypeError(
-      ("Unsupported FFI type for argument " + std::to_string(index)).c_str());
+        ("Unsupported FFI type for argument " + std::to_string(index)).c_str());
     return 0;
   }
 
   return 1;
-}
-
-bool ToJSReturnValue(Environment* env, const FunctionCallbackInfo<Value>& args, ffi_type *type, ffi_arg result) {
-  if (type ==&ffi_type_void) {
-    args.GetReturnValue().SetUndefined();
-  } else if (type ==&ffi_type_sint8) {
-    args.GetReturnValue().Set(static_cast<int32_t>(static_cast<int8_t>(result)));
-  } else if (type ==&ffi_type_uint8) {
-    args.GetReturnValue().Set(static_cast<uint32_t>(static_cast<uint8_t>(result)));
-  } else if (type ==&ffi_type_sint16) {
-    args.GetReturnValue().Set(static_cast<int32_t>(static_cast<int16_t>(result)));
-  } else if (type ==&ffi_type_uint16) {
-    args.GetReturnValue().Set(static_cast<uint32_t>(static_cast<uint16_t>(result)));
-  } else if (type ==&ffi_type_sint32) {
-    args.GetReturnValue().Set(static_cast<int32_t>(result));
-  } else if (type ==&ffi_type_uint32) {
-    args.GetReturnValue().Set(static_cast<uint32_t>(result));
-  } else if (type ==&ffi_type_sint64) {
-    args.GetReturnValue().Set(BigInt::NewFromUnsigned(env->isolate(), result));
-  } else if (type ==&ffi_type_uint64) {
-    args.GetReturnValue().Set(BigInt::NewFromUnsigned(env->isolate(), result));
-  } else if (type ==&ffi_type_float) {
-    args.GetReturnValue().Set(*reinterpret_cast<float*>(&result));
-  } else if (type ==&ffi_type_double) {
-    args.GetReturnValue().Set(*reinterpret_cast<double*>(&result));
-  } else if (type ==&ffi_type_pointer) {
-    args.GetReturnValue().Set(BigInt::NewFromUnsigned(env->isolate(), result));     
-  }
-
-  return true;
 }
 
 Local<Value> ToJSArgument(Isolate* isolate, ffi_type* type, void* data) {
@@ -258,15 +432,17 @@ Local<Value> ToJSArgument(Isolate* isolate, ffi_type* type, void* data) {
   } else if (type == &ffi_type_sint64) {
     ret = BigInt::New(isolate, *static_cast<int64_t*>(data));
   } else if (type == &ffi_type_uint64) {
-    ret = BigInt::NewFromUnsigned(isolate, *static_cast<int64_t*>(data));
+    ret = BigInt::NewFromUnsigned(isolate, *static_cast<uint64_t*>(data));
   } else if (type == &ffi_type_float) {
-    ret = Integer::New(isolate, *static_cast<float*>(data));
+    ret = Number::New(isolate, *static_cast<float*>(data));
   } else if (type == &ffi_type_double) {
-    ret = Integer::New(isolate, *static_cast<double*>(data));
-  } else if (type == &ffi_type_pointer) { 
-    // All others are treated as pointer (and thus bigint), the user will use other helpers to convert    
-    ret = BigInt::NewFromUnsigned(isolate, reinterpret_cast<uint64_t>(*static_cast<void**>(data)));
-  } else { 
+    ret = Number::New(isolate, *static_cast<double*>(data));
+  } else if (type == &ffi_type_pointer) {
+    // All others are treated as pointer (and thus bigint), the user will use
+    // other helpers to convert
+    ret = BigInt::NewFromUnsigned(
+        isolate, reinterpret_cast<uint64_t>(*static_cast<void**>(data)));
+  } else {
     // For anything else, return undefined to avoid problems
     ret = Undefined(isolate);
   }
@@ -274,79 +450,153 @@ Local<Value> ToJSArgument(Isolate* isolate, ffi_type* type, void* data) {
   return ret;
 }
 
-bool ToFFIReturnValue(Environment *env, Local<Value> result, ffi_type *type, void* ret) {  
-  Local<Context> context = env->context();
+bool ToJSReturnValue(Environment* env,
+                     const FunctionCallbackInfo<Value>& args,
+                     ffi_type* type,
+                     void* result) {
+  if (type == &ffi_type_void) {
+    args.GetReturnValue().SetUndefined();
+  } else if (type == &ffi_type_sint8) {
+    args.GetReturnValue().Set(
+        static_cast<int32_t>(*static_cast<const int8_t*>(result)));
+  } else if (type == &ffi_type_uint8) {
+    args.GetReturnValue().Set(
+        static_cast<uint32_t>(*static_cast<const uint8_t*>(result)));
+  } else if (type == &ffi_type_sint16) {
+    args.GetReturnValue().Set(
+        static_cast<int32_t>(*static_cast<const int16_t*>(result)));
+  } else if (type == &ffi_type_uint16) {
+    args.GetReturnValue().Set(
+        static_cast<uint32_t>(*static_cast<const uint16_t*>(result)));
+  } else if (type == &ffi_type_sint32) {
+    args.GetReturnValue().Set(*static_cast<const int32_t*>(result));
+  } else if (type == &ffi_type_uint32) {
+    args.GetReturnValue().Set(*static_cast<const uint32_t*>(result));
+  } else if (type == &ffi_type_sint64) {
+    args.GetReturnValue().Set(
+        BigInt::New(env->isolate(), *static_cast<const int64_t*>(result)));
+  } else if (type == &ffi_type_uint64) {
+    args.GetReturnValue().Set(BigInt::NewFromUnsigned(
+        env->isolate(), *static_cast<const uint64_t*>(result)));
+  } else if (type == &ffi_type_float) {
+    args.GetReturnValue().Set(*static_cast<const float*>(result));
+  } else if (type == &ffi_type_double) {
+    args.GetReturnValue().Set(*static_cast<const double*>(result));
+  } else if (type == &ffi_type_pointer) {
+    auto ptr = *static_cast<void* const*>(result);
+    args.GetReturnValue().Set(BigInt::NewFromUnsigned(
+        env->isolate(),
+        static_cast<uint64_t>(reinterpret_cast<uintptr_t>(ptr))));
+  }
+
+  return true;
+}
+
+bool ToFFIReturnValue(Local<Value> result, ffi_type* type, void* ret) {
+  if (type != &ffi_type_void && ret != nullptr) {
+    std::memset(ret, 0, type->size);
+  }
 
   if (type == &ffi_type_sint8) {
-    MaybeLocal<v8::Int32> val = result->ToInt32(context);
-    
-    if (!val.IsEmpty()) {
-      *static_cast<int8_t*>(ret) = static_cast<int8_t>(val.ToLocalChecked()->Value());
+    int64_t value;
+
+    if (!GetStrictSignedInteger(result, INT8_MIN, INT8_MAX, &value)) {
+      return false;
     }
+
+    *static_cast<int8_t*>(ret) = static_cast<int8_t>(value);
   } else if (type == &ffi_type_uint8) {
-    MaybeLocal<v8::Uint32> val = result->ToUint32(context);
-    
-    if (!val.IsEmpty()) {
-      *static_cast<uint8_t*>(ret) = static_cast<uint8_t>(val.ToLocalChecked()->Value());
+    uint64_t value;
+
+    if (!GetStrictUnsignedInteger(result, UINT8_MAX, &value)) {
+      return false;
     }
+
+    *static_cast<uint8_t*>(ret) = static_cast<uint8_t>(value);
   } else if (type == &ffi_type_sint16) {
-    MaybeLocal<v8::Int32> val = result->ToInt32(context);
-    
-    if (!val.IsEmpty()) {
-      *static_cast<int16_t*>(ret) = static_cast<int16_t>(val.ToLocalChecked()->Value());
+    int64_t value;
+
+    if (!GetStrictSignedInteger(result, INT16_MIN, INT16_MAX, &value)) {
+      return false;
     }
+
+    *static_cast<int16_t*>(ret) = static_cast<int16_t>(value);
   } else if (type == &ffi_type_uint16) {
-    MaybeLocal<v8::Uint32> val = result->ToUint32(context);
-    
-    if (!val.IsEmpty()) {
-      *static_cast<uint16_t*>(ret) = static_cast<uint16_t>(val.ToLocalChecked()->Value());
+    uint64_t value;
+
+    if (!GetStrictUnsignedInteger(result, UINT16_MAX, &value)) {
+      return false;
     }
+
+    *static_cast<uint16_t*>(ret) = static_cast<uint16_t>(value);
   } else if (type == &ffi_type_sint32) {
-    MaybeLocal<v8::Int32> val = result->ToInt32(context);
+    int64_t value;
 
-    if (!val.IsEmpty()) {
-      *static_cast<int32_t*>(ret) = val.ToLocalChecked()->Value();
+    if (!GetStrictSignedInteger(result, INT32_MIN, INT32_MAX, &value)) {
+      return false;
     }
-  } else if (type == &ffi_type_uint32) {
-    MaybeLocal<v8::Uint32> val = result->ToUint32(context);
 
-    if (!val.IsEmpty()) {
-      *static_cast<uint32_t*>(ret) = val.ToLocalChecked()->Value();
-    }    
+    *static_cast<int32_t*>(ret) = static_cast<int32_t>(value);
+  } else if (type == &ffi_type_uint32) {
+    uint64_t value;
+
+    if (!GetStrictUnsignedInteger(result, UINT32_MAX, &value)) {
+      return false;
+    }
+
+    *static_cast<uint32_t*>(ret) = static_cast<uint32_t>(value);
   } else if (type == &ffi_type_sint64) {
-    MaybeLocal<BigInt> val = result->ToBigInt(context);
-    
-    if (!val.IsEmpty()) {
-      *static_cast<int64_t*>(ret) = val.ToLocalChecked()->Int64Value();
+    bool lossless;
+
+    if (!result->IsBigInt()) {
+      return false;
+    }
+
+    *static_cast<int64_t*>(ret) = result.As<BigInt>()->Int64Value(&lossless);
+    if (!lossless) {
+      return false;
     }
   } else if (type == &ffi_type_uint64) {
-    MaybeLocal<BigInt> val = result->ToBigInt(context);
-    
-    if (!val.IsEmpty()) {
-      *static_cast<uint64_t*>(ret) = val.ToLocalChecked()->Uint64Value();
+    bool lossless;
+
+    if (!result->IsBigInt()) {
+      return false;
+    }
+
+    *static_cast<uint64_t*>(ret) = result.As<BigInt>()->Uint64Value(&lossless);
+    if (!lossless) {
+      return false;
     }
   } else if (type == &ffi_type_float) {
-    MaybeLocal<Number> val = result->ToNumber(context);
-    
-    if (!val.IsEmpty()) {
-      *static_cast<float*>(ret) = static_cast<float>(val.ToLocalChecked()->Value());
+    if (!result->IsNumber()) {
+      return false;
     }
+
+    *static_cast<float*>(ret) =
+        static_cast<float>(result.As<Number>()->Value());
   } else if (type == &ffi_type_double) {
-    MaybeLocal<Number> val = result->ToNumber(context);
-    
-    if (!val.IsEmpty()) {
-      *static_cast<double*>(ret) = val.ToLocalChecked()->Value();
+    if (!result->IsNumber()) {
+      return false;
     }
+
+    *static_cast<double*>(ret) = result.As<Number>()->Value();
   } else if (type == &ffi_type_pointer) {
-    // Note that strings, buffer or ArrayBuffer are ignored
-    if(!(result->IsBigInt() || result->IsNumber())) {
+    bool lossless;
+
+    if (result->IsBigInt()) {
+      *static_cast<uint64_t*>(ret) =
+          result.As<BigInt>()->Uint64Value(&lossless);
+      if (!lossless) {
+        return false;
+      }
+    } else {
+      // Note that strings, buffer or ArrayBuffer are ignored
       *static_cast<uint64_t*>(ret) = reinterpret_cast<uint64_t>(nullptr);
-    } else if (result->IsBigInt() || result->IsNumber()) {
-      *static_cast<uint64_t*>(ret) = result->IsBigInt()
-        ? result.As<BigInt>()->Uint64Value(nullptr)
-        : static_cast<uint64_t>(result.As<Number>()->Value());
+      return false;
     }
-  } 
+  } else if (type != &ffi_type_void) {
+    return false;
+  }
 
   return true;
 }
@@ -354,5 +604,5 @@ bool ToFFIReturnValue(Environment *env, Local<Value> result, ffi_type *type, voi
 }  // namespace ffi
 
 }  // namespace node
-  
+
 #endif  // HAVE_FFI

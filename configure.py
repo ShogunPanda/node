@@ -2210,12 +2210,39 @@ def configure_sqlite(o):
 
   configure_library('sqlite', o, pkgname='sqlite3')
 
+def bundled_ffi_supported(os_name, target_arch):
+  supported = {
+    'freebsd': {'arm', 'arm64', 'ia32', 'x64'},
+    'linux': {'arm', 'arm64', 'ia32', 'x64'},
+    'mac': {'arm64', 'x64'},
+    'win': {'arm', 'arm64', 'x64'},
+  }
+
+  if target_arch == 'x86':
+    target_arch = 'ia32'
+
+  return target_arch in supported.get(os_name, set())
+
 def configure_ffi(o):
-  o['variables']['node_use_ffi'] = b(not options.without_ffi)
+  use_ffi = not options.without_ffi
+
+  if use_ffi and not options.shared_ffi:
+    target_arch = o['variables']['target_arch']
+    if not bundled_ffi_supported(flavor, target_arch):
+      warn(f'FFI is disabled for {flavor}/{target_arch}: the bundled libffi '
+           'integration is not available on this platform. Use --shared-ffi '
+           'to provide a system libffi or --without-ffi to silence this '
+           'warning.')
+      use_ffi = False
+
+  o['variables']['node_use_ffi'] = b(use_ffi)
 
   if options.without_ffi:
     if options.shared_ffi:
-      error('--without-ffi is incompatible with --shared-ffi')    
+      error('--without-ffi is incompatible with --shared-ffi')
+    return
+
+  if not use_ffi:
     return
 
   configure_library('ffi', o, pkgname='libffi')
