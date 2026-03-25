@@ -213,7 +213,7 @@ const lib = new DynamicLibrary('mylib.so');
 ```
 
 ```console
-$ node --permission --experimental-ffi --allow-fs-read=* index.js
+$ node --permission --experimental-ffi index.js
 Error: Access to this API has been restricted. Use --allow-ffi to manage permissions.
     at node:internal/main/run_main_module:17:47 {
   code: 'ERR_ACCESS_DENIED',
@@ -1982,16 +1982,6 @@ changes:
 
 Legacy alias for [`--no-require-module`][].
 
-### `--no-experimental-ffi`
-
-<!-- YAML
-added: REPLACEME
--->
-
-Disable the experimental [`node:ffi`][] module.
-
-This flag is only available in builds with FFI support.
-
 ### `--no-experimental-sqlite`
 
 <!-- YAML
@@ -2215,7 +2205,7 @@ following permissions are restricted:
 * Worker Threads - manageable through [`--allow-worker`][] flag
 * WASI - manageable through [`--allow-wasi`][] flag
 * Addons - manageable through [`--allow-addons`][] flag
-* FFI - manageable through \[`--allow-ffi`]\[] flag
+* FFI - manageable through [`--allow-ffi`](#--allow-ffi) flag
 
 ### `--permission-audit`
 
@@ -3696,7 +3686,6 @@ one is included in the list below.
 * `--no-addons`
 * `--no-async-context-frame`
 * `--no-deprecation`
-* `--no-experimental-ffi`
 * `--no-experimental-global-navigator`
 * `--no-experimental-repl-await`
 * `--no-experimental-sqlite`

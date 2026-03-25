@@ -463,7 +463,9 @@
       'src/node_ffi.cc',
       'src/node_ffi.h',
       'src/ffi/data.cc',
-      'src/ffi/types.cc'
+      'src/ffi/data.h',
+      'src/ffi/types.cc',
+      'src/ffi/types.h',
     ],
     'node_mksnapshot_exec': '<(PRODUCT_DIR)/<(EXECUTABLE_PREFIX)node_mksnapshot<(EXECUTABLE_SUFFIX)',
     'node_js2c_exec': '<(PRODUCT_DIR)/<(EXECUTABLE_PREFIX)node_js2c<(EXECUTABLE_SUFFIX)',
@@ -997,8 +999,16 @@
               'dependencies': [
                 'deps/libffi/libffi.gyp:libffi',
               ],
-              'include_dirs': [
-                '<(PRODUCT_DIR)/obj.target/libffi/geni',
+              'conditions': [
+                [ 'OS=="win"', {
+                  'include_dirs': [
+                    '<(PRODUCT_DIR)/obj/libffi',
+                  ],
+                }, {
+                  'include_dirs': [
+                    '<(PRODUCT_DIR)/obj.target/libffi/geni',
+                  ],
+                }],
               ],
             }],
           ],
@@ -1067,8 +1077,16 @@
               'dependencies': [
                 'deps/libffi/libffi.gyp:libffi',
               ],
-              'include_dirs': [
-                '<(PRODUCT_DIR)/obj.target/libffi/geni',
+              'conditions': [
+                [ 'OS=="win"', {
+                  'include_dirs': [
+                    '<(PRODUCT_DIR)/obj/libffi',
+                  ],
+                }, {
+                  'include_dirs': [
+                    '<(PRODUCT_DIR)/obj.target/libffi/geni',
+                  ],
+                }],
               ],
             }],
           ],
