@@ -8,7 +8,7 @@
         [ 'OS=="win"', {
           'msvs_settings': {
             'VCLinkerTool': {
-              'ModuleDefinitionFile': 'ffi_test_library.def',
+              'ModuleDefinitionFile': '<(module_root_dir)/ffi_test_library.def',
             },
           },
         }],
