@@ -5,8 +5,7 @@ const ffi = require('node:ffi');
 const { libraryPath, ensureFixtureLibrary } = require('./common.js');
 
 const bench = common.createBenchmark(main, {
-  size: [64, 1024, 16384],
-  n: [1e6],
+  n: [1e7],
 }, {
   flags: ['--experimental-ffi'],
 });
@@ -14,19 +13,16 @@ const bench = common.createBenchmark(main, {
 ensureFixtureLibrary();
 
 const { lib, functions } = ffi.dlopen(libraryPath, {
-  sum_buffer: { result: 'u64', parameters: ['pointer', 'u64'] },
+  string_equals_hello: { result: 'u8', parameters: ['buffer'] },
 });
 
-function main({ n, size }) {
-  const buf = Buffer.alloc(size, 0x42);
-  const ptr = ffi.getRawPointer(buf);
-  const len = BigInt(size);
+const fn = functions.string_equals_hello;
+const string = Buffer.from('hello\0');
 
-  const sum = functions.sum_buffer;
-
+function main({ n }) {
   bench.start();
   for (let i = 0; i < n; ++i)
-    sum(ptr, len);
+    fn(string);
   bench.end(n);
 
   lib.close();

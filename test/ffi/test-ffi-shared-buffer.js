@@ -13,6 +13,7 @@ const { test } = require('node:test');
 const { internalBinding } = require('internal/test/binding');
 const ffiBinding = internalBinding('ffi');
 const {
+  kFastParams,
   kSbInvokeSlow,
   kSbParams,
   kSbResult,
@@ -130,14 +131,16 @@ test('pointer args: fast path (BigInt/null) and slow-path fallback (Buffer/Array
   }
 });
 
-test('string pointer uses slow-path fallback', () => {
+test('string pointer uses shared-buffer pointer conversion', () => {
   const { lib, functions } = ffi.dlopen(libraryPath, {
     string_length: { result: 'u64', parameters: ['pointer'] },
+    safe_strlen: { result: 'i32', parameters: ['string'] },
   });
   try {
     assert.strictEqual(functions.string_length('hello'), 5n);
-    // strlen(NULL) is UB, so use a NUL-terminated Buffer for the fast path.
     assert.strictEqual(functions.string_length(Buffer.from('world\0')), 5n);
+    assert.strictEqual(functions.safe_strlen('hello'), 5);
+    assert.strictEqual(functions.safe_strlen(null), -1);
   } finally {
     lib.close();
   }
@@ -356,6 +359,7 @@ test('SB metadata is Symbol-keyed, attribute-hardened, and not leaked onto the w
       rawLib, 'add_i32', { result: 'i32', parameters: ['i32', 'i32'] });
 
     for (const [name, sym] of [
+      ['kFastParams', kFastParams],
       ['kSbSharedBuffer', kSbSharedBuffer],
       ['kSbInvokeSlow', kSbInvokeSlow],
       ['kSbParams', kSbParams],
@@ -364,35 +368,41 @@ test('SB metadata is Symbol-keyed, attribute-hardened, and not leaked onto the w
       assert.strictEqual(typeof sym, 'symbol', `${name} must be a Symbol`);
     }
 
-    // Numeric-only signature: kSbInvokeSlow absent; the rest present and hardened.
+    // Fast-API-eligible signatures bypass the SB wrapper and therefore do not
+    // carry SB metadata.
     for (const [name, sym] of [
       ['kSbSharedBuffer', kSbSharedBuffer],
       ['kSbParams', kSbParams],
       ['kSbResult', kSbResult],
+      ['kSbInvokeSlow', kSbInvokeSlow],
     ]) {
       const desc = Object.getOwnPropertyDescriptor(rawFn, sym);
-      assert.ok(desc !== undefined, `${name} missing on pure-numeric SB function`);
-      assert.strictEqual(desc.enumerable, false);
-      assert.strictEqual(desc.configurable, false);
-      assert.strictEqual(desc.writable, false);
+      assert.strictEqual(desc, undefined, `${name} present on Fast API function`);
     }
-    assert.strictEqual(
-      Object.getOwnPropertyDescriptor(rawFn, kSbInvokeSlow), undefined);
 
-    // Pointer signature: kSbInvokeSlow must exist (and be hardened).
-    const rawPtrFn = rawGetFunctionUnpatched.call(
-      rawLib, 'identity_pointer', { result: 'pointer', parameters: ['pointer'] });
-    const slowDesc = Object.getOwnPropertyDescriptor(rawPtrFn, kSbInvokeSlow);
-    assert.ok(slowDesc !== undefined);
-    assert.strictEqual(slowDesc.enumerable, false);
-    assert.strictEqual(slowDesc.configurable, false);
-    assert.strictEqual(slowDesc.writable, false);
+    // Fast string signatures carry parameter metadata so the JS wrapper can
+    // perform string-to-pointer conversion, but still do not carry SB state.
+    const rawStringFn = rawGetFunctionUnpatched.call(
+      rawLib, 'safe_strlen', { result: 'u64', parameters: ['string'] });
+    const paramsDesc = Object.getOwnPropertyDescriptor(rawStringFn, kFastParams);
+    assert.ok(paramsDesc !== undefined, 'kFastParams missing on Fast string function');
+    assert.strictEqual(paramsDesc.enumerable, false);
+    assert.strictEqual(paramsDesc.configurable, false);
+    assert.strictEqual(paramsDesc.writable, false);
+    assert.strictEqual(
+      Object.getOwnPropertyDescriptor(rawStringFn, kSbParams), undefined);
+    assert.strictEqual(
+      Object.getOwnPropertyDescriptor(rawStringFn, kSbSharedBuffer), undefined);
+    assert.strictEqual(
+      Object.getOwnPropertyDescriptor(rawStringFn, kSbResult), undefined);
+    assert.strictEqual(
+      Object.getOwnPropertyDescriptor(rawStringFn, kSbInvokeSlow), undefined);
 
     assert.deepStrictEqual(Object.keys(rawFn), ['pointer']);
     const ownSyms = Object.getOwnPropertySymbols(rawFn);
-    assert.ok(ownSyms.includes(kSbSharedBuffer));
-    assert.ok(ownSyms.includes(kSbParams));
-    assert.ok(ownSyms.includes(kSbResult));
+    assert.ok(!ownSyms.includes(kSbSharedBuffer));
+    assert.ok(!ownSyms.includes(kSbParams));
+    assert.ok(!ownSyms.includes(kSbResult));
 
     // Internals must not be forwarded by `inheritMetadata`.
     const { lib, functions } = ffi.dlopen(libraryPath, {

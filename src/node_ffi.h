@@ -3,6 +3,7 @@
 #if defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
 
 #include "base_object.h"
+#include "ffi/fast.h"
 #include "ffi.h"
 #include "uv.h"
 
@@ -35,6 +36,8 @@ struct FFIFunctionInfo {
   std::shared_ptr<v8::BackingStore> sb_backing;
   // Keep the owning DynamicLibrary alive while the generated function is alive.
   v8::Global<v8::Object> library;
+  std::unique_ptr<FastFFIMetadata> fast_metadata;
+  std::unique_ptr<FastFFIMetadata> fast_buffer_metadata;
 };
 
 struct FFICallback {

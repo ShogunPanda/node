@@ -13,15 +13,15 @@ const bench = common.createBenchmark(main, {
 ensureFixtureLibrary();
 
 const { lib, functions } = ffi.dlopen(libraryPath, {
-  add_f64: { result: 'f64', parameters: ['f64', 'f64'] },
+  add_f32: { result: 'f32', parameters: ['f32', 'f32'] },
 });
 
-const add = functions.add_f64;
+const add = functions.add_f32;
 
 function main({ n }) {
   bench.start();
   for (let i = 0; i < n; ++i)
-    add(1.5, 2.5);
+    add(20.5, 21.5);
   bench.end(n);
 
   lib.close();
