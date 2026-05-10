@@ -470,6 +470,7 @@
       'src/node_ffi.cc',
       'src/node_ffi.h',
       'src/ffi/platforms/arm64.cc',
+      'src/ffi/platforms/x64.cc',
       'src/ffi/data.cc',
       'src/ffi/data.h',
       'src/ffi/fast.cc',

@@ -372,7 +372,7 @@ extern "C" void node_ffi_free_fast_trampoline(
   trampoline->size = 0;
 }
 
-#else
+#elif !defined(__x86_64__)
 
 extern "C" bool node_ffi_create_fast_trampoline(
     void* target,
