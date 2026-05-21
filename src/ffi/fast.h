@@ -50,6 +50,14 @@ struct FastFFIMetadata {
   v8::CFunction c_function;
 };
 
+// Public detection queries.
+
+// Returns true if the fast-call path is available at all on this process
+// (platform stub emitter exists + JIT memory self-test passed). Independent
+// of any particular signature — if this returns false, no signature can
+// use the fast-call path.
+bool IsFastCallSupported();
+
 bool SignatureNeedsRawPointerConversions(const FFIFunction& fn);
 bool IsPointerTypeName(const std::string& name);
 bool SignatureNeedsFastBufferInvoke(const FFIFunction& fn);

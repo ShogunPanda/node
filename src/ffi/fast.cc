@@ -3,6 +3,8 @@
 #include "ffi/fast.h"
 
 #include "env-inl.h"
+#include "ffi/jit_memory.h"
+#include "ffi/types.h"
 #include "node_errors.h"
 #include "node_ffi.h"
 
@@ -219,7 +221,31 @@ FastFFIMetadata::~FastFFIMetadata() {
   node_ffi_free_fast_trampoline(&trampoline);
 }
 
+bool IsFastCallSupported() {
+  // Fast call requires both a platform stub emitter and working JIT memory.
+#if defined(__aarch64__) || defined(_M_ARM64) || defined(__x86_64__)
+  return IsJitMemorySupported();
+#else
+  return false;
+#endif
+}
+
 std::unique_ptr<FastFFIMetadata> CreateFastFFIMetadata(const FFIFunction& fn) {
+  // Bail early if executable memory allocation doesn't work on this process
+  // (missing MAP_JIT entitlement, hardened runtime, SELinux execmem, etc.).
+  // The self-test runs once and caches the result.
+  if (!IsJitMemorySupported()) {
+    return nullptr;
+  }
+
+  // Check signature-level eligibility (type checks, register caps, platform
+  // support). Returning nullptr here lets the caller fall back to SharedBuffer
+  // or the generic libffi path.
+  const char* eligibility_reason;
+  if (!IsFastCallEligible(fn, &eligibility_reason)) {
+    return nullptr;
+  }
+
   // Reject unsupported result types first. Returning nullptr means the caller
   // can still fall back to SharedBuffer or the generic libffi path.
   FastFFIType result;
