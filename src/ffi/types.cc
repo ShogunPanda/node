@@ -83,14 +83,42 @@ Maybe<FunctionSignature> ParseFunctionSignature(Environment* env,
                                                 std::string_view name,
                                                 Local<Object> signature) {
   Local<Context> context = env->context();
+  Local<String> returns_key = env->returns_string();
   Local<String> return_key = env->return_string();
+  Local<String> result_key = env->result_string();
+  Local<String> parameters_key = env->parameters_string();
   Local<String> arguments_key = env->arguments_string();
 
+  bool has_returns;
   bool has_return;
+  bool has_result;
+  bool has_parameters;
   bool has_arguments;
 
-  if (!signature->Has(context, return_key).To(&has_return) ||
+  if (!signature->Has(context, returns_key).To(&has_returns) ||
+      !signature->Has(context, return_key).To(&has_return) ||
+      !signature->Has(context, result_key).To(&has_result) ||
+      !signature->Has(context, parameters_key).To(&has_parameters) ||
       !signature->Has(context, arguments_key).To(&has_arguments)) {
+    return {};
+  }
+
+  if (has_returns + has_return + has_result > 1) {
+    THROW_ERR_INVALID_ARG_VALUE(
+        env,
+        "Function signature of %s"
+        " must have either 'returns', 'return' or 'result' "
+        "property",
+        name);
+    return {};
+  }
+
+  if (has_arguments && has_parameters) {
+    THROW_ERR_INVALID_ARG_VALUE(env,
+                                "Function signature of %s"
+                                " must have either 'parameters' or 'arguments' "
+                                "property",
+                                name);
     return {};
   }
 
@@ -100,9 +128,18 @@ Maybe<FunctionSignature> ParseFunctionSignature(Environment* env,
   std::vector<std::string> arg_type_names;
 
   Isolate* isolate = env->isolate();
-  if (has_return) {
+  if (has_returns || has_return || has_result) {
+    Local<String> return_type_key;
+    if (has_returns) {
+      return_type_key = returns_key;
+    } else if (has_return) {
+      return_type_key = return_key;
+    } else {
+      return_type_key = result_key;
+    }
+
     Local<Value> return_type_val;
-    if (!signature->Get(context, return_key).ToLocal(&return_type_val)) {
+    if (!signature->Get(context, return_type_key).ToLocal(&return_type_val)) {
       return {};
     }
 
@@ -125,9 +162,10 @@ Maybe<FunctionSignature> ParseFunctionSignature(Environment* env,
     return_type_name = return_type_str.ToString();
   }
 
-  if (has_arguments) {
+  if (has_arguments || has_parameters) {
     Local<Value> arguments_val;
-    if (!signature->Get(context, arguments_key).ToLocal(&arguments_val)) {
+    if (!signature->Get(context, has_arguments ? arguments_key : parameters_key)
+             .ToLocal(&arguments_val)) {
       return {};
     }
 
@@ -198,6 +236,164 @@ bool SignaturesMatch(const FFIFunction& fn,
     }
   }
 
+  return true;
+}
+
+namespace {
+
+bool IsFastCallEligibleFFIType(ffi_type* type) {
+  // Accept all numeric types, pointer, and void (void OK as return only).
+  // Rejects struct types (not yet supported in fast-call path).
+  return type == &ffi_type_void || type == &ffi_type_sint8 ||
+         type == &ffi_type_uint8 || type == &ffi_type_sint16 ||
+         type == &ffi_type_uint16 || type == &ffi_type_sint32 ||
+         type == &ffi_type_uint32 || type == &ffi_type_sint64 ||
+         type == &ffi_type_uint64 || type == &ffi_type_float ||
+         type == &ffi_type_double || type == &ffi_type_pointer;
+}
+
+bool IsFunctionTypeName(const std::string& name) {
+  return name == "function";
+}
+
+// Check if an FFI type occupies a floating-point register.
+bool IsFFITypeFloat(ffi_type* type) {
+  return type == &ffi_type_float || type == &ffi_type_double;
+}
+
+// Check if an FFI type name maps to a kBuffer (kV8Value) argument in the
+// fast-call path, which consumes an extra GP register for the helper call.
+bool IsBufferTypeName(const std::string& name) {
+  return name == "buffer" || name == "arraybuffer";
+}
+
+}  // namespace
+
+bool IsFastCallEligible(const FFIFunction& fn, const char** out_reason) {
+  static const char* dummy = "";
+  if (out_reason == nullptr) out_reason = &dummy;
+
+  // Check that a platform stub emitter exists for the current ABI.
+  // Stub emitters cover AArch64 (Linux/macOS/FreeBSD/Windows) and
+  // x86_64 (SysV: Linux/macOS/FreeBSD, Win64: Windows). Other platforms
+  // fall back to libffi.
+#if !defined(__aarch64__) && !defined(_M_ARM64) && !defined(__x86_64__)
+  *out_reason = "no platform stub emitter";
+  return false;
+#endif
+
+  // Check return type eligibility.
+  if (!IsFastCallEligibleFFIType(fn.return_type)) {
+    *out_reason = "unsupported return type";
+    return false;
+  }
+  if (IsFunctionTypeName(fn.return_type_name)) {
+    *out_reason = "return type is function";
+    return false;
+  }
+
+  // V8's fast-call lowering caps the C-side arg count. With HasReceiver=kNo
+  // there's no implicit receiver in the count, so this is the user-arg cap.
+  // V8's hard limit is 8 args; signatures over that fall back to libffi.
+  if (fn.args.size() > 8) {
+    *out_reason = "argument count exceeds V8 fast-call cap";
+    return false;
+  }
+
+  // Per-ABI register caps for arguments that must be passed in registers.
+  // If an arg can't fit in a register, it goes on the stack — which the
+  // current trampoline generators don't support.
+  // `args` and `arg_type_names` are read in lockstep below. A malformed
+  // FFIFunction with mismatched lengths would otherwise index out of bounds,
+  // so reject it here rather than relying on callers to pre-validate.
+  if (fn.args.size() != fn.arg_type_names.size()) {
+    *out_reason = "argument type name count mismatch";
+    return false;
+  }
+
+  size_t gp_count = 0;
+  size_t fp_count = 0;
+  bool has_buffer_arg = false;
+  for (size_t i = 0; i < fn.args.size(); ++i) {
+    ffi_type* t = fn.args[i];
+    const std::string& name = fn.arg_type_names[i];
+
+    if (!IsFastCallEligibleFFIType(t)) {
+      *out_reason = "unsupported arg type";
+      return false;
+    }
+    // `void` is fine as a return type but has no register slot, so it cannot
+    // appear in `args`.
+    if (t == &ffi_type_void) {
+      *out_reason = "void cannot be an argument type";
+      return false;
+    }
+    if (IsFunctionTypeName(name)) {
+      *out_reason = "arg is function";
+      return false;
+    }
+
+    // `buffer`/`arraybuffer` args arrive as kV8Value in the V8 fast-call
+    // signature, consuming an extra GP register for the helper call.
+    if (IsBufferTypeName(name)) {
+      has_buffer_arg = true;
+    }
+
+    // Count register classes used by each argument.
+    if (IsFFITypeFloat(t)) {
+      fp_count++;
+    } else {
+      gp_count++;
+    }
+  }
+
+  // Platform-specific register pressure limits.
+#if defined(__aarch64__) || defined(_M_ARM64)
+  // AArch64: 8 FP registers (v0-v7) + up to 7 GP registers per trampoline
+  // constraint (the 8th GP slot is consumed by the helper call for buffer
+  // args). Buffer args and float args can't coexist — the helper call would
+  // clobber FP state.
+  const size_t effective_gp = gp_count + (has_buffer_arg ? 1 : 0);
+  if (has_buffer_arg && fp_count != 0) {
+    *out_reason = "buffer and float args cannot coexist on AArch64";
+    return false;
+  }
+  if (effective_gp > 7 || fp_count > 8) {
+    *out_reason = "argument count exceeds AArch64 register limit";
+    return false;
+  }
+#elif defined(__x86_64__)
+#if defined(_WIN32)
+  // No Win64 trampoline emitter exists (src/ffi/platforms implements only
+  // AArch64 and x86_64 SysV), so Win64 fast-call is never eligible. This is
+  // already short-circuited earlier by IsJitMemorySupported() returning false
+  // on Windows; rejecting here keeps eligibility self-consistent regardless of
+  // caller order.
+  *out_reason = "no Win64 fast-call trampoline emitter";
+  return false;
+#else
+  // x86_64 SysV: the V8 receiver occupies rdi, leaving rsi, rdx, rcx, r8, r9
+  // (5 incoming GP slots); scalar signatures can load one more user GP arg
+  // from the caller stack, for an effective cap of 6 GP. FP args use
+  // xmm0-xmm7. Buffer args spill the whole incoming GP window through a C++
+  // helper, so they cannot coexist with FP args and stay register-only
+  // (incoming GP = gp + 1 must fit in the 5 incoming registers, i.e. <= 4 GP
+  // when a buffer is present). These rules mirror the constraints enforced by
+  // node_ffi_create_fast_trampoline in src/ffi/platforms/x64.cc.
+  if (has_buffer_arg && fp_count != 0) {
+    *out_reason = "buffer and float args cannot coexist on x86_64 SysV";
+    return false;
+  }
+  const size_t incoming_gp = gp_count + (has_buffer_arg ? 1 : 0);
+  const size_t max_incoming_gp = has_buffer_arg ? 5 : 6;
+  if (incoming_gp > max_incoming_gp || fp_count > 8) {
+    *out_reason = "argument count exceeds x86_64 SysV register limit";
+    return false;
+  }
+#endif  // _WIN32
+#endif  // __x86_64__
+
+  *out_reason = "";
   return true;
 }
 
